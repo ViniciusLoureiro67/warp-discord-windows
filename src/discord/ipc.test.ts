@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { encodeFrame, FrameDecoder, Opcode, pipePath } from './ipc.js';
+import { DiscordNotRunningError, encodeFrame, FrameDecoder, Opcode, pipePath } from './ipc.js';
 
 test('encodeFrame writes little-endian opcode and payload length', () => {
   const frame = encodeFrame(Opcode.Handshake, { v: 1, client_id: '123' });
@@ -47,6 +47,18 @@ test('FrameDecoder treats an empty payload as null', () => {
   header.writeUInt32LE(Opcode.Pong, 0);
   header.writeUInt32LE(0, 4);
   assert.deepEqual(decoder.push(header), [{ op: Opcode.Pong, data: null }]);
+});
+
+test('DiscordNotRunningError groups pipe failures by reason', () => {
+  const enoent = Object.assign(new Error('connect ENOENT'), { code: 'ENOENT' });
+  const error = new DiscordNotRunningError([
+    { index: 0, error: new Error('handshake timed out on pipe 0') },
+    { index: 1, error: enoent },
+    { index: 2, error: enoent },
+    { index: 3, error: enoent },
+  ]);
+  assert.equal(error.describeAttempts(), 'pipe 0: handshake timed out on pipe 0; pipes 1-3: ENOENT');
+  assert.equal(new DiscordNotRunningError([]).describeAttempts(), '');
 });
 
 test('pipePath builds the Windows named pipe path', () => {

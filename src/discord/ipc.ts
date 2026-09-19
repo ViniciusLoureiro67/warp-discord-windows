@@ -78,14 +78,58 @@ export class DiscordIpcError extends Error {
   }
 }
 
-/** No Discord IPC pipe answered: Discord is probably not running. */
-export class DiscordNotRunningError extends Error {
-  override readonly cause: Error;
+export interface PipeAttempt {
+  index: number;
+  error: Error;
+}
 
-  constructor(cause: Error) {
+/**
+ * The pipe accepted the connection but Discord never sent READY.
+ *
+ * Discord delays new handshakes for roughly 30 seconds after the previous
+ * Rich Presence session on that pipe closed, so this usually means "wait a
+ * little longer", not "Discord is broken".
+ */
+export class HandshakeTimeoutError extends Error {
+  readonly pipeIndex: number;
+
+  constructor(pipeIndex: number, timeoutMs: number) {
+    super(`handshake timed out after ${Math.round(timeoutMs / 1000)}s on pipe ${pipeIndex}`);
+    this.name = 'HandshakeTimeoutError';
+    this.pipeIndex = pipeIndex;
+  }
+}
+
+/** No Discord IPC pipe completed the handshake: Discord is probably not running. */
+export class DiscordNotRunningError extends Error {
+  readonly attempts: PipeAttempt[];
+
+  constructor(attempts: PipeAttempt[]) {
     super('Discord is not running (no IPC pipe answered)');
     this.name = 'DiscordNotRunningError';
-    this.cause = cause;
+    this.attempts = attempts;
+  }
+
+  /** True when some pipe accepted the connection but never completed the handshake. */
+  get handshakeTimedOut(): boolean {
+    return this.attempts.some((attempt) => attempt.error instanceof HandshakeTimeoutError);
+  }
+
+  /** One line per distinct failure, e.g. "pipe 0: handshake timed out; pipes 1-9: ENOENT". */
+  describeAttempts(): string {
+    const groups = new Map<string, number[]>();
+    for (const attempt of this.attempts) {
+      const code = (attempt.error as NodeJS.ErrnoException).code;
+      const reason = code ?? attempt.error.message;
+      groups.set(reason, [...(groups.get(reason) ?? []), attempt.index]);
+    }
+    return [...groups.entries()]
+      .map(([reason, indexes]) => {
+        const label =
+          indexes.length === 1 ? `pipe ${indexes[0]}` : `pipes ${indexes[0]}-${indexes[indexes.length - 1]}`;
+        return `${label}: ${reason}`;
+      })
+      .join('; ');
   }
 }
 
@@ -126,17 +170,26 @@ interface PendingRequest {
   timer: NodeJS.Timeout;
 }
 
+/**
+ * Discord answers a new handshake only ~30 s after the previous session on the
+ * pipe closed. Waiting costs nothing when Discord is not running (the pipe does
+ * not exist, so connecting fails instantly), hence the generous default.
+ */
+export const DEFAULT_HANDSHAKE_TIMEOUT_MS = 60_000;
+
 export interface DiscordIpcClientOptions {
   clientId: string;
   /** Pipe indexes to try, in order. Defaults to 0..9. */
   pipeIndexes?: number[];
-  /** Handshake timeout per pipe in milliseconds. Default 5000. */
+  /** Handshake timeout per pipe in milliseconds. Default 60000. */
   handshakeTimeoutMs?: number;
   /** Timeout for each command in milliseconds. Default 10000. */
   requestTimeoutMs?: number;
 }
 
 export interface DiscordIpcClientEvents {
+  /** The pipe accepted the connection; READY may still take a while. */
+  pipeConnected: [index: number];
   ready: [data: unknown];
   closed: [reason: string, wasReady: boolean];
   rpcError: [data: unknown];
@@ -166,7 +219,7 @@ export class DiscordIpcClient extends EventEmitter<DiscordIpcClientEvents> {
     super();
     this.clientId = options.clientId;
     this.pipeIndexes = options.pipeIndexes ?? Array.from({ length: 10 }, (_, index) => index);
-    this.handshakeTimeoutMs = options.handshakeTimeoutMs ?? 5000;
+    this.handshakeTimeoutMs = options.handshakeTimeoutMs ?? DEFAULT_HANDSHAKE_TIMEOUT_MS;
     this.requestTimeoutMs = options.requestTimeoutMs ?? 10_000;
   }
 
@@ -176,18 +229,19 @@ export class DiscordIpcClient extends EventEmitter<DiscordIpcClientEvents> {
 
   /** Try every pipe until one completes the handshake. */
   async connect(): Promise<void> {
-    let lastError: Error = new Error('no pipe indexes configured');
+    const attempts: PipeAttempt[] = [];
     for (const index of this.pipeIndexes) {
       try {
         await this.connectToPipe(index);
         return;
       } catch (error) {
-        lastError = error instanceof Error ? error : new Error(String(error));
+        const failure = error instanceof Error ? error : new Error(String(error));
         // Discord answered but rejected us (e.g. invalid client id): other pipes won't help.
-        if (lastError instanceof DiscordIpcError && lastError.code !== null) throw lastError;
+        if (failure instanceof DiscordIpcError && failure.code !== null) throw failure;
+        attempts.push({ index, error: failure });
       }
     }
-    throw new DiscordNotRunningError(lastError);
+    throw new DiscordNotRunningError(attempts);
   }
 
   private connectToPipe(index: number): Promise<void> {
@@ -212,7 +266,7 @@ export class DiscordIpcClient extends EventEmitter<DiscordIpcClientEvents> {
         }
       };
       const timer = setTimeout(
-        () => finish(new Error(`handshake timed out on pipe ${index}`)),
+        () => finish(new HandshakeTimeoutError(index, this.handshakeTimeoutMs)),
         this.handshakeTimeoutMs,
       );
 
@@ -223,6 +277,7 @@ export class DiscordIpcClient extends EventEmitter<DiscordIpcClientEvents> {
       socket.once('connect', () => {
         this.socket = socket;
         this.pipeIndex = index;
+        this.emit('pipeConnected', index);
         socket.on('data', (chunk: Buffer) => {
           if (socket !== this.socket) return;
           try {

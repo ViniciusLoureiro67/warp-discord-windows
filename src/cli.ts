@@ -357,23 +357,27 @@ async function doctorCommand(args: ParsedArgs): Promise<void> {
   for (const warning of loaded.warnings) checks.push({ ok: false, label: 'Config', detail: warning });
 
   if (pipes.length > 0 && loaded.config.clientId) {
-    const client = new DiscordIpcClient({ clientId: loaded.config.clientId, handshakeTimeoutMs: 4000 });
+    console.log(dim('Checking the Discord handshake (takes up to 30 s right after another Rich Presence session closed)...'));
+    const client = new DiscordIpcClient({ clientId: loaded.config.clientId, handshakeTimeoutMs: 45_000 });
     try {
+      const started = Date.now();
       await client.connect();
+      const waited = Math.round((Date.now() - started) / 1000);
       checks.push({
         ok: true,
         label: 'Discord handshake',
-        detail: `logged in as @${client.user?.username ?? 'unknown'} via pipe ${client.pipeIndex ?? '?'}`,
+        detail:
+          `logged in as @${client.user?.username ?? 'unknown'} via pipe ${client.pipeIndex ?? '?'}` +
+          (waited >= 2 ? ` (Discord took ${waited} s to answer)` : ''),
       });
     } catch (handshakeError) {
-      checks.push({
-        ok: false,
-        label: 'Discord handshake',
-        detail:
-          handshakeError instanceof DiscordNotRunningError
-            ? 'pipe exists but nobody answered; restart Discord'
-            : `${errorMessage(handshakeError)}; double-check the application id`,
-      });
+      let detail = `${errorMessage(handshakeError)}; double-check the application id`;
+      if (handshakeError instanceof DiscordNotRunningError) {
+        detail = handshakeError.handshakeTimedOut
+          ? 'Discord accepted the connection but did not answer within 45 s; restart Discord'
+          : `no pipe answered (${handshakeError.describeAttempts()}); restart Discord`;
+      }
+      checks.push({ ok: false, label: 'Discord handshake', detail });
     } finally {
       client.destroy();
     }

@@ -14,7 +14,11 @@ export interface PresenceClient {
   clearActivity(): Promise<unknown>;
   destroy(): void;
   on(event: 'closed', listener: (reason: string, wasReady: boolean) => void): unknown;
+  on(event: 'pipeConnected', listener: (index: number) => void): unknown;
 }
+
+/** How long a pending handshake stays silent before we explain the wait. */
+const HANDSHAKE_HINT_DELAY_MS = 2_000;
 
 export interface RunnerOptions {
   config: Config;
@@ -48,7 +52,8 @@ export async function runPresence(options: RunnerOptions): Promise<void> {
   const { config, logger, signal } = options;
   const now = options.now ?? Date.now;
   const takeSnapshot = options.snapshot ?? (await import('./win32/warp.js')).takeSnapshot;
-  const createClient = options.createClient ?? ((clientId: string) => new DiscordIpcClient({ clientId }));
+  const createClient: (clientId: string) => PresenceClient =
+    options.createClient ?? ((clientId) => new DiscordIpcClient({ clientId }));
 
   let client: PresenceClient | null = null;
   let sessionStart: number | null = null;
@@ -77,6 +82,15 @@ export async function runPresence(options: RunnerOptions): Promise<void> {
 
   const connectOnce = async (): Promise<PresenceClient | null> => {
     const candidate = createClient(config.clientId);
+    let handshakeHint: NodeJS.Timeout | null = null;
+    candidate.on('pipeConnected', (index) => {
+      handshakeHint = setTimeout(() => {
+        logger.info(
+          `Discord accepted the connection on pipe ${index} and is taking its time with the handshake. ` +
+            'It answers about 30 s after the previous Rich Presence session closed; hang on.',
+        );
+      }, HANDSHAKE_HINT_DELAY_MS);
+    });
     try {
       await candidate.connect();
     } catch (error) {
@@ -88,10 +102,16 @@ export async function runPresence(options: RunnerOptions): Promise<void> {
         );
         nextConnectAttempt = now() + MAX_BACKOFF_MS;
       } else if (error instanceof DiscordNotRunningError) {
-        if (!waitingAnnounced) {
+        if (error.handshakeTimedOut) {
+          logger.warn(
+            `Discord accepted the connection but never completed the handshake (${error.describeAttempts()}). ` +
+              `Retrying in ${backoffMs / 1000}s.`,
+          );
+        } else if (!waitingAnnounced) {
           logger.info('Discord is not running. Waiting for it...');
           waitingAnnounced = true;
         }
+        logger.debug(`Connection attempts: ${error.describeAttempts()}`);
         nextConnectAttempt = now() + backoffMs;
         backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS);
       } else {
@@ -100,6 +120,8 @@ export async function runPresence(options: RunnerOptions): Promise<void> {
         backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS);
       }
       return null;
+    } finally {
+      if (handshakeHint) clearTimeout(handshakeHint);
     }
 
     const who = candidate.user ? `@${candidate.user.username}` : 'an unknown user';

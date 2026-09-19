@@ -17,7 +17,7 @@ class FakeClient implements PresenceClient {
   constructor(private readonly shouldConnect: boolean) {}
 
   async connect(): Promise<void> {
-    if (!this.shouldConnect) throw new DiscordNotRunningError(new Error('ENOENT'));
+    if (!this.shouldConnect) throw new DiscordNotRunningError([{ index: 0, error: new Error('ENOENT') }]);
     this.connected = true;
   }
 
@@ -34,8 +34,8 @@ class FakeClient implements PresenceClient {
     this.connected = false;
   }
 
-  on(_event: 'closed', listener: (reason: string, wasReady: boolean) => void): this {
-    this.listeners.push(listener);
+  on(event: string, listener: (...args: any[]) => void): this {
+    if (event === 'closed') this.listeners.push(listener);
     return this;
   }
 
