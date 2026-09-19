@@ -8,4 +8,4 @@ export const DISCORD_DEVELOPER_PORTAL = 'https://discord.com/developers/applicat
  * `warp-discord-windows config set clientId <id>` or the WARP_DISCORD_CLIENT_ID
  * environment variable.
  */
-export const DEFAULT_CLIENT_ID = '';
+export const DEFAULT_CLIENT_ID = '1550994580508246136';

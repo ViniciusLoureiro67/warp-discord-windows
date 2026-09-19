@@ -77,9 +77,9 @@ This starts it in the background right away and again every time you log in to W
 `warp-discord-windows autostart off` reverts it.
 
 > **Note**
-> Rich Presence needs a Discord *application id*. The published package ships with one built in,
-> so the commands above just work. If you cloned the repository instead, follow
-> [Using your own Discord application](#using-your-own-discord-application) once.
+> Rich Presence needs a Discord *application id*. One is built in (the "Warp" application this
+> project maintains), so the commands above just work. Want your own name or artwork? See
+> [Using your own Discord application](#using-your-own-discord-application).
 
 ## Commands
 
@@ -181,8 +181,8 @@ Only Warp windows are inspected. Titles of other windows (browser tabs, chats, d
 
 ## Using your own Discord application
 
-The published package ships with a shared application id (the same model VS Code presence extensions use).
-You only need your own if you clone the repository, want a different name than "Warp", or your own artwork.
+A shared application id is built in (the same model VS Code presence extensions use), so this is optional.
+Create your own only if you want a different name than "Warp" or your own artwork.
 
 1. Open the [Discord Developer Portal](https://discord.com/developers/applications) and click **New Application**. The name is what Discord shows after "Playing", so call it **Warp**.
 2. Copy the **Application ID** from *General Information*.
