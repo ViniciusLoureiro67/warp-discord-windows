@@ -2,7 +2,20 @@
  * Public API. The CLI is the main entry point, but every building block is
  * exported so you can embed the presence in your own tooling.
  */
-export { DEFAULT_CONFIG, loadConfig, mergeConfig, saveConfig, withConfigValue, type Config, type PresenceText } from './config.js';
+export {
+  DEFAULT_CONFIG,
+  loadConfig,
+  mergeConfig,
+  PRESET_NAMES,
+  PRESETS,
+  saveOverrides,
+  withOverride,
+  withoutOverride,
+  type Config,
+  type Overrides,
+  type PresenceText,
+  type PresetName,
+} from './config.js';
 export { APP_NAME, DEFAULT_CLIENT_ID, REPO_URL } from './constants.js';
 export {
   DiscordIpcClient,

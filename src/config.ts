@@ -5,32 +5,74 @@ import { DEFAULT_CLIENT_ID } from './constants.js';
 import type { ActivityButton } from './discord/ipc.js';
 import { getConfigPath, type Env } from './paths.js';
 
+/**
+ * Every line of text the card can show. The first line is picked by what
+ * Warp's window title looks like (prompt, running command or named task),
+ * the second by focus/idle state. Placeholders ({folder}, {path}, {program},
+ * {command}, {title}) only fill in when a template contains them, so the
+ * default presets never send anything from your screen.
+ */
 export interface PresenceText {
-  /** Top line while the shell sits at the prompt; placeholders: {folder}, {path}, {title}. */
-  directory: string;
-  /** Top line while a command runs; placeholders: {program}, {command}, {title}. */
+  /** First line while the shell waits at the prompt. Placeholders: {folder}, {path}, {title}. */
+  prompt: string;
+  /** First line while a command runs. Placeholders: {program}, {command}, {title}. */
   command: string;
-  /** Top line for tools that name the session (Claude Code and friends); placeholder: {title}. */
+  /** First line when a tool names the session (Claude Code and friends). Placeholder: {title}. */
   task: string;
-  /** Top line when the window title is hidden, empty or not understood. */
-  noTitle: string;
-  /** Bottom line while Warp is the foreground window. */
+  /** First line when the title is empty, still "Warp", or a template rendered empty. */
+  fallback: string;
+  /** Second line while Warp is the foreground window. */
   focused: string;
-  /** Bottom line while Warp is open but another window has focus. */
+  /** Second line while Warp is open but another window has focus. */
   background: string;
-  /** Bottom line after `idleAfterMinutes` without keyboard/mouse input. */
+  /** Second line after `idleAfterMinutes` without keyboard/mouse input. */
   idle: string;
 }
+
+export const PRESET_NAMES = ['generic', 'fun', 'detailed'] as const;
+export type PresetName = (typeof PRESET_NAMES)[number];
+
+export const PRESETS: Record<PresetName, PresenceText> = {
+  generic: {
+    prompt: 'In the terminal',
+    command: 'Running a command',
+    task: 'Working on a task',
+    fallback: 'In the terminal',
+    focused: 'Focused',
+    background: 'In the background',
+    idle: 'Idle',
+  },
+  fun: {
+    prompt: 'Staring at a blinking cursor',
+    command: 'Waiting for a command to finish',
+    task: 'Deep in the zone',
+    fallback: 'Somewhere in a terminal',
+    focused: 'Locked in',
+    background: 'Multitasking',
+    idle: 'AFK',
+  },
+  detailed: {
+    prompt: 'Working in {folder}',
+    command: 'Running {program}',
+    task: 'Working on {title}',
+    fallback: 'In the terminal',
+    focused: 'Focused',
+    background: 'In the background',
+    idle: 'Idle',
+  },
+};
 
 export interface Config {
   /** Discord application id. Empty means "not configured". */
   clientId: string;
+  /** Which wording to start from. Individual `text` entries override it. */
+  preset: PresetName;
+  /** A fixed first line ("Terminal developer") that replaces prompt/command/task texts. Empty = off. */
+  firstLine: string;
   /** How often the desktop is inspected, in milliseconds. */
   pollIntervalMs: number;
   /** Minutes without input before the presence switches to the idle text. 0 disables. */
   idleAfterMinutes: number;
-  /** Show the Warp window title (usually your current directory or command). */
-  showWindowTitle: boolean;
   /** Keep the presence while Warp is open but not focused. */
   showInBackground: boolean;
   /** Show the "elapsed" timer counting from when Warp was first seen. */
@@ -49,9 +91,10 @@ export interface Config {
 
 export const DEFAULT_CONFIG: Config = {
   clientId: DEFAULT_CLIENT_ID,
+  preset: 'generic',
+  firstLine: '',
   pollIntervalMs: 2000,
   idleAfterMinutes: 5,
-  showWindowTitle: true,
   showInBackground: true,
   showElapsedTime: true,
   activityType: 0,
@@ -60,15 +103,7 @@ export const DEFAULT_CONFIG: Config = {
   smallImageKey: 'windows',
   smallImageText: 'Windows',
   buttons: [],
-  text: {
-    directory: 'Working in {folder}',
-    command: 'Running {program}',
-    task: 'Working on {title}',
-    noTitle: 'In the terminal',
-    focused: 'Focused',
-    background: 'In the background',
-    idle: 'Idle',
-  },
+  text: { ...PRESETS.generic },
 };
 
 export const ALLOWED_ACTIVITY_TYPES = [0, 2, 3, 5];
@@ -76,16 +111,26 @@ export const MIN_POLL_INTERVAL_MS = 500;
 export const MAX_BUTTONS = 2;
 export const MAX_BUTTON_LABEL_LENGTH = 32;
 
+/** The raw JSON object stored on disk: only the keys the user changed. */
+export type Overrides = Record<string, unknown>;
+
 export interface LoadedConfig {
+  /** Effective configuration: preset + overrides + environment. */
   config: Config;
+  /** What the file actually contains. */
+  overrides: Overrides;
   path: string;
-  /** Whether a config file exists on disk (otherwise defaults are in effect). */
+  /** Whether a config file exists on disk. */
   exists: boolean;
   warnings: string[];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isPresetName(value: unknown): value is PresetName {
+  return typeof value === 'string' && (PRESET_NAMES as readonly string[]).includes(value);
 }
 
 function isValidUrl(value: string): boolean {
@@ -127,8 +172,8 @@ function readButtons(value: unknown, warnings: string[]): ActivityButton[] {
   return buttons;
 }
 
-function readText(value: unknown, warnings: string[]): PresenceText {
-  const text = { ...DEFAULT_CONFIG.text };
+function readText(value: unknown, base: PresenceText, warnings: string[]): PresenceText {
+  const text = { ...base };
   if (!isRecord(value)) {
     warnings.push('"text" must be an object; ignored');
     return text;
@@ -147,7 +192,7 @@ function readText(value: unknown, warnings: string[]): PresenceText {
   return text;
 }
 
-/** Merge a parsed JSON value on top of the defaults, validating every option. */
+/** Resolve the effective config from a parsed JSON value: preset first, then every override, then validation. */
 export function mergeConfig(raw: unknown, warnings: string[] = []): Config {
   const config = structuredClone(DEFAULT_CONFIG);
   if (raw === undefined || raw === null) return config;
@@ -156,8 +201,18 @@ export function mergeConfig(raw: unknown, warnings: string[] = []): Config {
     return config;
   }
 
+  if (raw.preset !== undefined) {
+    if (isPresetName(raw.preset)) {
+      config.preset = raw.preset;
+    } else {
+      warnings.push(`"preset" must be one of ${PRESET_NAMES.join(', ')}; using "generic"`);
+    }
+  }
+  config.text = { ...PRESETS[config.preset] };
+
   const target = config as unknown as Record<string, unknown>;
   for (const [key, value] of Object.entries(raw)) {
+    if (key === 'preset') continue;
     if (!(key in DEFAULT_CONFIG)) {
       warnings.push(`unknown option "${key}" ignored`);
       continue;
@@ -167,7 +222,7 @@ export function mergeConfig(raw: unknown, warnings: string[] = []): Config {
       continue;
     }
     if (key === 'text') {
-      config.text = readText(value, warnings);
+      config.text = readText(value, config.text, warnings);
       continue;
     }
     const expected = typeof (DEFAULT_CONFIG as unknown as Record<string, unknown>)[key];
@@ -221,17 +276,21 @@ export function loadConfig(env: Env = process.env): LoadedConfig {
   const config = mergeConfig(raw, warnings);
   const envClientId = env.WARP_DISCORD_CLIENT_ID?.trim();
   if (envClientId) config.clientId = envClientId;
-  return { config, path: file, exists, warnings };
+  return { config, overrides: isRecord(raw) ? raw : {}, path: file, exists, warnings };
 }
 
-export function saveConfig(config: Config, file: string = getConfigPath()): void {
+export function saveOverrides(overrides: Overrides, file: string = getConfigPath()): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+  fs.writeFileSync(file, `${JSON.stringify(overrides, null, 2)}\n`, 'utf8');
 }
 
 export function configKeys(): string[] {
   const keys = Object.keys(DEFAULT_CONFIG).filter((key) => key !== 'text');
   return [...keys, ...Object.keys(DEFAULT_CONFIG.text).map((key) => `text.${key}`)];
+}
+
+function unknownKey(key: string): Error {
+  return new Error(`unknown option "${key}". Known options: ${configKeys().join(', ')}`);
 }
 
 export function getConfigValue(config: Config, key: string): unknown {
@@ -242,7 +301,7 @@ export function getConfigValue(config: Config, key: string): unknown {
   if (rest.length === 0 && head !== undefined && head in DEFAULT_CONFIG) {
     return (config as unknown as Record<string, unknown>)[head];
   }
-  throw new Error(`unknown option "${key}". Known options: ${configKeys().join(', ')}`);
+  throw unknownKey(key);
 }
 
 function parseBoolean(raw: string, key: string): boolean {
@@ -266,46 +325,81 @@ function parseButtons(raw: string): unknown {
   }
 }
 
-/** Return a copy of `config` with `key` (dotted paths allowed) set from a CLI string. */
-export function withConfigValue(config: Config, key: string, rawValue: string): Config {
-  const next = structuredClone(config);
+/** Turn a CLI string into the typed value for `key`. */
+function parseValue(key: string, rawValue: string): unknown {
   const [head, ...rest] = key.split('.');
-
-  if (head === 'text' && rest.length === 1 && rest[0]! in DEFAULT_CONFIG.text) {
-    next.text[rest[0] as keyof PresenceText] = rawValue;
-    return next;
+  if (head === 'text') {
+    if (rest.length === 1 && rest[0]! in DEFAULT_CONFIG.text) return rawValue;
+    throw unknownKey(key);
   }
-  if (head === undefined || rest.length > 0 || !(head in DEFAULT_CONFIG)) {
-    throw new Error(`unknown option "${key}". Known options: ${configKeys().join(', ')}`);
+  if (head === undefined || rest.length > 0 || !(head in DEFAULT_CONFIG)) throw unknownKey(key);
+  if (head === 'buttons') return parseButtons(rawValue);
+  switch (typeof (DEFAULT_CONFIG as unknown as Record<string, unknown>)[head]) {
+    case 'boolean':
+      return parseBoolean(rawValue, key);
+    case 'number':
+      return parseNumber(rawValue, key);
+    default:
+      return rawValue.trim();
   }
+}
 
-  const target = next as unknown as Record<string, unknown>;
-  if (head === 'buttons') {
-    target.buttons = parseButtons(rawValue);
-  } else {
-    switch (typeof (DEFAULT_CONFIG as unknown as Record<string, unknown>)[head]) {
-      case 'boolean':
-        target[head] = parseBoolean(rawValue, key);
-        break;
-      case 'number':
-        target[head] = parseNumber(rawValue, key);
-        break;
-      default:
-        target[head] = rawValue;
+/** Return a copy of the stored overrides with `key` set from a CLI string, validated. */
+export function withOverride(overrides: Overrides, key: string, rawValue: string): Overrides {
+  const next: Overrides = structuredClone(overrides);
+  const value = parseValue(key, rawValue);
+  const [head, sub] = key.split('.');
+
+  if (head === 'text') {
+    next.text = { ...(isRecord(next.text) ? next.text : {}), [sub!]: value };
+  } else if (head === 'preset') {
+    // Texts that merely repeated the old preset's wording must not shadow the new preset.
+    const previous = isPresetName(next.preset) ? next.preset : 'generic';
+    if (isRecord(next.text)) {
+      const text = { ...next.text };
+      for (const [textKey, textValue] of Object.entries(text)) {
+        if (PRESETS[previous][textKey as keyof PresenceText] === textValue) delete text[textKey];
+      }
+      if (Object.keys(text).length === 0) delete next.text;
+      else next.text = text;
     }
+    next.preset = value;
+  } else {
+    next[head!] = value;
   }
 
   const warnings: string[] = [];
-  const validated = mergeConfig(next, warnings);
+  mergeConfig(next, warnings);
   if (warnings.length > 0) throw new Error(warnings.join('; '));
-  return validated;
+  return next;
 }
 
-/** Return a copy of `config` with `key` restored to its default value. */
-export function withDefaultValue(config: Config, key: string): Config {
-  const defaultValue = getConfigValue(DEFAULT_CONFIG, key);
-  const raw = typeof defaultValue === 'string' ? defaultValue : JSON.stringify(defaultValue);
-  return withConfigValue(config, key, raw);
+/** Return a copy of the stored overrides without `key`, so the preset default applies again. */
+export function withoutOverride(overrides: Overrides, key: string): Overrides {
+  if (!configKeys().includes(key)) throw unknownKey(key);
+  const next: Overrides = structuredClone(overrides);
+  const [head, sub] = key.split('.');
+  if (head === 'text') {
+    if (isRecord(next.text)) {
+      const text = { ...next.text };
+      delete text[sub!];
+      if (Object.keys(text).length === 0) delete next.text;
+      else next.text = text;
+    }
+  } else {
+    delete next[head!];
+  }
+  return next;
+}
+
+/** Dotted names of every key present in the overrides, for display. */
+export function overrideKeys(overrides: Overrides): string[] {
+  const keys: string[] = [];
+  for (const [key, value] of Object.entries(overrides)) {
+    if (key === 'text' && isRecord(value)) keys.push(...Object.keys(value).map((textKey) => `text.${textKey}`));
+    else keys.push(key);
+  }
+  return keys;
 }
 
 export function errorMessage(error: unknown): string {

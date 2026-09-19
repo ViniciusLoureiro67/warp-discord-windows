@@ -135,18 +135,24 @@ export function renderTemplate(template: string, vars: Record<string, string>): 
     .trim();
 }
 
-/** The first line of the card, built from the window title and the configured templates. */
+/**
+ * The first line of the card. The window title only decides *which* template
+ * is used; its content reaches Discord solely through placeholders, and the
+ * default presets have none.
+ */
 export function describeTitle(raw: string | null, config: Config, homeDir: string = os.homedir()): string {
-  if (!config.showWindowTitle || raw === null) return config.text.noTitle;
-  const info = classifyTitle(raw, homeDir);
+  const info = raw === null ? classifyTitle('', homeDir) : classifyTitle(raw, homeDir);
+  const fixed = config.firstLine.trim();
   const template =
-    info.kind === 'directory'
-      ? config.text.directory
-      : info.kind === 'command'
-        ? config.text.command
-        : info.kind === 'task'
-          ? config.text.task
-          : '';
+    fixed.length > 0
+      ? fixed
+      : info.kind === 'directory'
+        ? config.text.prompt
+        : info.kind === 'command'
+          ? config.text.command
+          : info.kind === 'task'
+            ? config.text.task
+            : '';
   const rendered = renderTemplate(template, {
     title: info.title,
     folder: info.folder,
@@ -154,7 +160,7 @@ export function describeTitle(raw: string | null, config: Config, homeDir: strin
     command: info.title,
     path: info.title,
   });
-  return rendered.length > 0 ? rendered : config.text.noTitle;
+  return rendered.length > 0 ? rendered : config.text.fallback;
 }
 
 /** Keep a Discord text field inside its allowed length, falling back when too short. */
@@ -191,7 +197,7 @@ export function buildActivity(input: PresenceInput, config: Config): Activity | 
 
   const activity: Activity = {
     type: config.activityType,
-    details: clampField(details, config.text.noTitle),
+    details: clampField(details, config.text.fallback),
     state: clampField(state, 'Warp'),
     instance: false,
   };

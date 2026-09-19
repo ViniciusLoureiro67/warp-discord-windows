@@ -95,7 +95,7 @@ test('runner sends the activity once, then only when it changes', async () => {
   });
 
   assert.equal(client.sent.length, 3);
-  assert.equal(client.sent[0]?.details, 'Working in my-project');
+  assert.equal(client.sent[0]?.details, 'In the terminal');
   assert.equal(client.sent[0]?.state, 'Focused');
   assert.equal(client.sent[1]?.state, 'In the background');
   assert.equal(client.sent[2], null, 'shutdown clears the presence');
@@ -144,7 +144,7 @@ test('runner keeps polling while Discord is missing and connects once it appears
   assert.equal(attempts, 2);
   assert.equal(offline.sent.length, 0);
   assert.ok(online.sent.length >= 2);
-  assert.equal(online.sent[0]?.details, 'Working in my-project');
+  assert.equal(online.sent[0]?.details, 'In the terminal');
   assert.equal(online.sent.at(-1), null);
 });
 
@@ -163,7 +163,7 @@ test('runner reconnects after Discord drops the pipe and re-sends the presence',
   assert.equal(attempts, 2);
   assert.equal(first.sent.length, 1, 'first connection sent the presence once');
   assert.ok(second.sent.length >= 2, 'new connection re-sends the presence and clears on shutdown');
-  assert.equal(second.sent[0]?.details, 'Working in my-project');
+  assert.equal(second.sent[0]?.details, 'In the terminal');
   assert.equal(second.sent.at(-1), null);
 });
 
@@ -186,6 +186,6 @@ test('runner survives a failing snapshot and carries on', async () => {
   });
 
   assert.equal(calls, 3);
-  assert.equal(client.sent[0]?.details, 'Working in my-project');
+  assert.equal(client.sent[0]?.details, 'In the terminal');
   assert.equal(client.sent.at(-1), null);
 });

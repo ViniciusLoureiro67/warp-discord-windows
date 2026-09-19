@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { DEFAULT_CONFIG, type Config } from './config.js';
+import { DEFAULT_CONFIG, mergeConfig, PRESETS, type Config } from './config.js';
 import {
   buildActivity,
   clampField,
@@ -88,24 +88,47 @@ test('renderTemplate fills placeholders and drops unknown ones', () => {
   assert.equal(renderTemplate('Terminal developer', {}), 'Terminal developer');
 });
 
-test('describeTitle applies the template for each kind of title', () => {
+test('describeTitle never leaks the title with the default (generic) preset', () => {
   const cfg = config();
-  assert.equal(describeTitle('~\\projects\\warp-discord-windows', cfg, HOME), 'Working in warp-discord-windows');
-  assert.equal(describeTitle('node bin/warp-discord-windows.js run', cfg, HOME), 'Running node warp-discord-windows');
-  assert.equal(describeTitle('✳ Discord Rich Presence para Warp Windows', cfg, HOME), 'Working on Discord Rich Presence para Warp Windows');
+  assert.equal(describeTitle('~\\projects\\top-secret-client', cfg, HOME), 'In the terminal');
+  assert.equal(describeTitle('curl -H "Authorization: Bearer abc"', cfg, HOME), 'Running a command');
+  assert.equal(describeTitle('✳ Discord Rich Presence para Warp Windows', cfg, HOME), 'Working on a task');
   assert.equal(describeTitle('Warp', cfg, HOME), 'In the terminal');
   assert.equal(describeTitle(null, cfg, HOME), 'In the terminal');
-  assert.equal(describeTitle('~\\x', config({ showWindowTitle: false }), HOME), 'In the terminal');
 });
 
-test('describeTitle supports fixed text and custom placeholders', () => {
-  const fixed = config({ text: { ...DEFAULT_CONFIG.text, directory: 'Terminal developer', command: 'Terminal developer' } });
+test('describeTitle follows the fun and detailed presets', () => {
+  const fun = mergeConfig({ preset: 'fun' });
+  assert.equal(describeTitle('~\\projects\\app', fun, HOME), PRESETS.fun.prompt);
+  assert.equal(describeTitle('npm test', fun, HOME), PRESETS.fun.command);
+  assert.equal(describeTitle('', fun, HOME), PRESETS.fun.fallback);
+
+  const detailed = mergeConfig({ preset: 'detailed' });
+  assert.equal(describeTitle('~\\projects\\warp-discord-windows', detailed, HOME), 'Working in warp-discord-windows');
+  assert.equal(describeTitle('node bin/warp-discord-windows.js run', detailed, HOME), 'Running node warp-discord-windows');
+  assert.equal(describeTitle('✳ Discord Rich Presence para Warp Windows', detailed, HOME), 'Working on Discord Rich Presence para Warp Windows');
+  assert.equal(describeTitle('Warp', detailed, HOME), 'In the terminal');
+});
+
+test('describeTitle uses a fixed first line when one is set', () => {
+  const fixed = mergeConfig({ firstLine: 'Terminal developer' });
   assert.equal(describeTitle('~\\projects\\app', fixed, HOME), 'Terminal developer');
   assert.equal(describeTitle('npm test', fixed, HOME), 'Terminal developer');
-  const verbose = config({ text: { ...DEFAULT_CONFIG.text, command: '$ {command}', directory: '📁 {path}' } });
+  assert.equal(describeTitle('✳ task', fixed, HOME), 'Terminal developer');
+  assert.equal(describeTitle(null, fixed, HOME), 'Terminal developer');
+  // Placeholders still work for people who want them, and blank means "off".
+  assert.equal(describeTitle('npm test', mergeConfig({ firstLine: '{program} enjoyer' }), HOME), 'npm test enjoyer');
+  assert.equal(describeTitle('npm test', mergeConfig({ firstLine: '   ' }), HOME), 'Running a command');
+});
+
+test('describeTitle supports custom templates and falls back when they render empty', () => {
+  const fixed = mergeConfig({ text: { prompt: 'Terminal developer', command: 'Terminal developer', task: 'Terminal developer' } });
+  assert.equal(describeTitle('~\\projects\\app', fixed, HOME), 'Terminal developer');
+  assert.equal(describeTitle('npm test', fixed, HOME), 'Terminal developer');
+  const verbose = mergeConfig({ text: { command: '$ {command}', prompt: '📁 {path}' } });
   assert.equal(describeTitle('npm test', verbose, HOME), '$ npm test');
   assert.equal(describeTitle('C:\\Users\\vini\\app', verbose, HOME), '📁 ~\\app');
-  const empty = config({ text: { ...DEFAULT_CONFIG.text, directory: '' } });
+  const empty = mergeConfig({ text: { prompt: '' } });
   assert.equal(describeTitle('~\\app', empty, HOME), 'In the terminal');
 });
 
@@ -134,7 +157,7 @@ test('buildActivity fills details, state, assets and timestamps', () => {
   const activity = buildActivity(input(), config());
   assert.deepEqual(activity, {
     type: 0,
-    details: 'Working in warp-discord-windows',
+    details: 'In the terminal',
     state: 'Focused',
     instance: false,
     assets: {
@@ -153,11 +176,8 @@ test('buildActivity switches state for background and idle', () => {
   assert.equal(buildActivity(input({ idleMs: 5 * 60_000 }), config({ idleAfterMinutes: 0 }))?.state, 'Focused');
 });
 
-test('buildActivity respects privacy and display toggles', () => {
-  const activity = buildActivity(
-    input({ title: 'C:\\Users\\vini\\secret' }),
-    config({ showWindowTitle: false, showElapsedTime: false, largeImageKey: '' }),
-  );
+test('buildActivity respects display toggles', () => {
+  const activity = buildActivity(input(), config({ showElapsedTime: false, largeImageKey: '' }));
   assert.equal(activity?.details, 'In the terminal');
   assert.equal(activity?.timestamps, undefined);
   assert.equal(activity?.assets, undefined);

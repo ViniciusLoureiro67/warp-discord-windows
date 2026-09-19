@@ -9,14 +9,17 @@ import {
   getConfigValue,
   loadConfig,
   mergeConfig,
-  saveConfig,
-  withConfigValue,
-  withDefaultValue,
+  overrideKeys,
+  PRESETS,
+  saveOverrides,
+  withOverride,
+  withoutOverride,
 } from './config.js';
 
 test('mergeConfig returns defaults for empty input', () => {
   assert.deepEqual(mergeConfig(undefined), DEFAULT_CONFIG);
   assert.deepEqual(mergeConfig({}), DEFAULT_CONFIG);
+  assert.deepEqual(DEFAULT_CONFIG.text, PRESETS.generic);
 });
 
 test('mergeConfig applies known keys and warns about unknown or mistyped ones', () => {
@@ -28,10 +31,27 @@ test('mergeConfig applies known keys and warns about unknown or mistyped ones', 
   assert.equal(config.clientId, '123456789012345678');
   assert.equal(config.pollIntervalMs, DEFAULT_CONFIG.pollIntervalMs);
   assert.equal(config.text.idle, 'AFK');
-  assert.equal(config.text.focused, DEFAULT_CONFIG.text.focused);
+  assert.equal(config.text.focused, PRESETS.generic.focused);
   assert.ok(warnings.some((warning) => warning.includes('"pollIntervalMs"')));
   assert.ok(warnings.some((warning) => warning.includes('"bogus"')));
   assert.ok(warnings.some((warning) => warning.includes('text.nope')));
+});
+
+test('mergeConfig starts from the preset and lets text entries override it', () => {
+  const warnings: string[] = [];
+  const fun = mergeConfig({ preset: 'fun', text: { idle: 'Sleeping' } }, warnings);
+  assert.equal(fun.preset, 'fun');
+  assert.equal(fun.text.prompt, PRESETS.fun.prompt);
+  assert.equal(fun.text.idle, 'Sleeping');
+  assert.equal(warnings.length, 0);
+
+  const detailed = mergeConfig({ preset: 'detailed' });
+  assert.equal(detailed.text.prompt, 'Working in {folder}');
+
+  const badWarnings: string[] = [];
+  const bad = mergeConfig({ preset: 'loud' }, badWarnings);
+  assert.equal(bad.preset, 'generic');
+  assert.ok(badWarnings.some((warning) => warning.includes('"preset"')));
 });
 
 test('mergeConfig clamps the poll interval and rejects bad activity types', () => {
@@ -63,28 +83,48 @@ test('mergeConfig validates buttons', () => {
   assert.equal(warnings.length, 3);
 });
 
-test('withConfigValue parses booleans, numbers, strings and dotted keys', () => {
-  let config = withConfigValue(DEFAULT_CONFIG, 'showWindowTitle', 'off');
-  assert.equal(config.showWindowTitle, false);
-  config = withConfigValue(config, 'idleAfterMinutes', '10');
-  assert.equal(config.idleAfterMinutes, 10);
-  config = withConfigValue(config, 'text.focused', 'Hacking');
-  assert.equal(config.text.focused, 'Hacking');
-  config = withConfigValue(config, 'buttons', '[{"label":"Site","url":"https://example.com"}]');
-  assert.deepEqual(config.buttons, [{ label: 'Site', url: 'https://example.com' }]);
+test('withOverride parses booleans, numbers, strings, JSON and dotted keys', () => {
+  let overrides = withOverride({}, 'showInBackground', 'off');
+  assert.deepEqual(overrides, { showInBackground: false });
+  overrides = withOverride(overrides, 'idleAfterMinutes', '10');
+  overrides = withOverride(overrides, 'text.focused', 'Hacking');
+  overrides = withOverride(overrides, 'buttons', '[{"label":"Site","url":"https://example.com"}]');
+  assert.deepEqual(overrides, {
+    showInBackground: false,
+    idleAfterMinutes: 10,
+    text: { focused: 'Hacking' },
+    buttons: [{ label: 'Site', url: 'https://example.com' }],
+  });
+  const config = mergeConfig(overrides);
   assert.equal(getConfigValue(config, 'text.focused'), 'Hacking');
+  assert.equal(getConfigValue(config, 'idleAfterMinutes'), 10);
 });
 
-test('withConfigValue rejects unknown keys and invalid values', () => {
-  assert.throws(() => withConfigValue(DEFAULT_CONFIG, 'nope', '1'), /unknown option "nope"/);
-  assert.throws(() => withConfigValue(DEFAULT_CONFIG, 'showWindowTitle', 'maybe'), /expects true or false/);
-  assert.throws(() => withConfigValue(DEFAULT_CONFIG, 'pollIntervalMs', '100'), /at least 500/);
-  assert.throws(() => withConfigValue(DEFAULT_CONFIG, 'buttons', 'not json'), /expects JSON/);
+test('withOverride rejects unknown keys and invalid values', () => {
+  assert.throws(() => withOverride({}, 'nope', '1'), /unknown option "nope"/);
+  assert.throws(() => withOverride({}, 'text.nope', 'x'), /unknown option "text.nope"/);
+  assert.throws(() => withOverride({}, 'showInBackground', 'maybe'), /expects true or false/);
+  assert.throws(() => withOverride({}, 'pollIntervalMs', '100'), /at least 500/);
+  assert.throws(() => withOverride({}, 'buttons', 'not json'), /expects JSON/);
+  assert.throws(() => withOverride({}, 'preset', 'loud'), /"preset" must be one of/);
 });
 
-test('withDefaultValue restores a single key', () => {
-  const changed = withConfigValue(DEFAULT_CONFIG, 'text.idle', 'Zzz');
-  assert.equal(withDefaultValue(changed, 'text.idle').text.idle, DEFAULT_CONFIG.text.idle);
+test('switching preset drops text entries that only repeated the old preset', () => {
+  const pasted = { preset: 'generic', text: { ...PRESETS.generic, idle: 'Zzz' } };
+  const switched = withOverride(pasted, 'preset', 'fun');
+  assert.deepEqual(switched, { preset: 'fun', text: { idle: 'Zzz' } });
+  const config = mergeConfig(switched);
+  assert.equal(config.text.prompt, PRESETS.fun.prompt);
+  assert.equal(config.text.idle, 'Zzz');
+});
+
+test('withoutOverride removes a key so the preset default applies again', () => {
+  const overrides = { preset: 'fun', text: { idle: 'Zzz', focused: 'Go' }, idleAfterMinutes: 3 };
+  assert.deepEqual(withoutOverride(overrides, 'text.idle'), { preset: 'fun', text: { focused: 'Go' }, idleAfterMinutes: 3 });
+  assert.deepEqual(withoutOverride(withoutOverride(overrides, 'text.idle'), 'text.focused'), { preset: 'fun', idleAfterMinutes: 3 });
+  assert.deepEqual(withoutOverride(overrides, 'idleAfterMinutes'), { preset: 'fun', text: { idle: 'Zzz', focused: 'Go' } });
+  assert.throws(() => withoutOverride(overrides, 'nope'), /unknown option/);
+  assert.deepEqual(overrideKeys(overrides), ['preset', 'text.idle', 'text.focused', 'idleAfterMinutes']);
 });
 
 test('loadConfig reads the file under APPDATA and honours WARP_DISCORD_CLIENT_ID', () => {
@@ -93,12 +133,15 @@ test('loadConfig reads the file under APPDATA and honours WARP_DISCORD_CLIENT_ID
     const missing = loadConfig({ APPDATA: appData });
     assert.equal(missing.exists, false);
     assert.deepEqual(missing.config, DEFAULT_CONFIG);
+    assert.deepEqual(missing.overrides, {});
 
-    saveConfig({ ...DEFAULT_CONFIG, showElapsedTime: false }, missing.path);
+    saveOverrides({ showElapsedTime: false, preset: 'fun' }, missing.path);
     const loaded = loadConfig({ APPDATA: appData, WARP_DISCORD_CLIENT_ID: ' 987654321098765432 ' });
     assert.equal(loaded.exists, true);
     assert.equal(loaded.config.showElapsedTime, false);
+    assert.equal(loaded.config.text.idle, 'AFK');
     assert.equal(loaded.config.clientId, '987654321098765432');
+    assert.deepEqual(loaded.overrides, { showElapsedTime: false, preset: 'fun' });
     assert.deepEqual(loaded.warnings, []);
 
     fs.writeFileSync(missing.path, '{ not json', 'utf8');

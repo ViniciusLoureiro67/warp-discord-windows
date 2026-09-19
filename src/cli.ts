@@ -6,14 +6,19 @@ import path from 'node:path';
 import { disableAutostart, enableAutostart, getCliScriptPath, isAutostartEnabled } from './autostart.js';
 import {
   configKeys,
-  DEFAULT_CONFIG,
   errorMessage,
   getConfigValue,
   loadConfig,
-  saveConfig,
-  withConfigValue,
-  withDefaultValue,
+  mergeConfig,
+  overrideKeys,
+  PRESET_NAMES,
+  PRESETS,
+  saveOverrides,
+  withOverride,
+  withoutOverride,
   type Config,
+  type LoadedConfig,
+  type Overrides,
 } from './config.js';
 import { APP_NAME, DISCORD_DEVELOPER_PORTAL, REPO_URL } from './constants.js';
 import { findRunningInstance, removePidFile, stopRunningInstance, writePidFile } from './daemon.js';
@@ -100,7 +105,7 @@ ${bold('Commands:')}
   status               Show the instance, autostart, Discord and Warp state
   doctor               Check Discord, Warp, the client id and native bindings
   autostart on|off     Start automatically when you log in to Windows
-  config               Show the config (also: get, set, reset, path, open, init)
+  config               Show the config (also: get, set, reset, presets, path, open, init)
   logs                 Print the last lines of the log file
 
 ${bold('Options:')}
@@ -112,10 +117,11 @@ ${bold('Options:')}
   --help, -h           Show this help
 
 ${bold('Examples:')}
-  ${APP_NAME}                                   ${dim('# try it right now')}
-  ${APP_NAME} config set clientId 123456789012345678
-  ${APP_NAME} config set showWindowTitle false  ${dim('# hide the window title')}
-  ${APP_NAME} autostart on                      ${dim('# start with Windows')}
+  ${APP_NAME}                                        ${dim('# try it right now')}
+  ${APP_NAME} autostart on                           ${dim('# start with Windows')}
+  ${APP_NAME} config set preset fun                  ${dim('# other wording, still generic')}
+  ${APP_NAME} config set firstLine "Terminal developer"
+  ${APP_NAME} config set text.idle "AFK"
 
 ${bold('Files:')}
   config  ${getConfigPath()}
@@ -141,7 +147,7 @@ function printMissingClientId(): void {
   You can also pass ${bold('--client-id <id>')} or set the ${bold('WARP_DISCORD_CLIENT_ID')} environment variable.`);
 }
 
-function loadConfigForCli(args: ParsedArgs): { config: Config; path: string; exists: boolean; warnings: string[] } {
+function loadConfigForCli(args: ParsedArgs): LoadedConfig {
   const loaded = loadConfig();
   const flagClientId = args.flags.get('client-id');
   if (typeof flagClientId === 'string' && flagClientId.trim().length > 0) {
@@ -151,8 +157,12 @@ function loadConfigForCli(args: ParsedArgs): { config: Config; path: string; exi
 }
 
 /** Load the config without env overrides, so `config set` never persists an env value. */
-function loadStoredConfig(): { config: Config; path: string; exists: boolean; warnings: string[] } {
+function loadStoredConfig(): LoadedConfig {
   return loadConfig({ ...process.env, WARP_DISCORD_CLIENT_ID: undefined });
+}
+
+function hasStoredClientId(overrides: Overrides): boolean {
+  return typeof overrides.clientId === 'string' && overrides.clientId.trim().length > 0;
 }
 
 async function runCommand(args: ParsedArgs): Promise<void> {
@@ -298,7 +308,7 @@ async function statusCommand(args: ParsedArgs): Promise<void> {
   console.log(`  ${'Autostart'.padEnd(20)} ${isAutostartEnabled() ? `${OK} enabled` : `${INFO} disabled`}`);
   console.log(`  ${'Discord'.padEnd(20)} ${pipes.length > 0 ? `${OK} running (pipe ${pipes.join(', ')})` : `${BAD} not running`}`);
   console.log(`  ${'Warp'.padEnd(20)} ${warpLine}`);
-  console.log(`  ${'Client id'.padEnd(20)} ${describeClientId(loaded.config, stored.exists && stored.config.clientId.length > 0)}`);
+  console.log(`  ${'Client id'.padEnd(20)} ${describeClientId(loaded.config, hasStoredClientId(stored.overrides))}`);
   console.log(`  ${'Config'.padEnd(20)} ${loaded.path}${loaded.exists ? '' : dim(' (defaults)')}`);
   for (const warning of loaded.warnings) console.log(`  ${WARN} config: ${warning}`);
 }
@@ -434,7 +444,8 @@ function autostartCommand(args: ParsedArgs): void {
 }
 
 function formatValue(value: unknown): string {
-  return typeof value === 'string' ? value : JSON.stringify(value);
+  if (typeof value === 'string') return value.length === 0 ? dim('(empty)') : value;
+  return JSON.stringify(value);
 }
 
 function openInEditor(file: string): void {
@@ -442,9 +453,26 @@ function openInEditor(file: string): void {
   child.unref();
 }
 
+function printPresets(current: string): void {
+  const notes: Record<string, string> = {
+    generic: 'default, says nothing about what you are doing',
+    fun: 'same idea, more personality',
+    detailed: 'shows folder, program and task names from Warp\'s title',
+  };
+  for (const name of PRESET_NAMES) {
+    const text = PRESETS[name];
+    const marker = name === current ? green('●') : dim('○');
+    console.log(`${marker} ${bold(name)} ${dim(`(${notes[name]})`)}`);
+    console.log(`    ${text.prompt} ${dim('·')} ${text.command} ${dim('·')} ${text.task}`);
+    console.log(`    ${text.focused} ${dim('·')} ${text.background} ${dim('·')} ${text.idle}`);
+  }
+}
+
 function configCommand(args: ParsedArgs): void {
   const [action = 'show', key, ...valueParts] = args.positional;
   const stored = loadStoredConfig();
+  const initial: Overrides = { preset: 'generic' };
+  const save = (next: Overrides): void => saveOverrides(next, stored.path);
   const restartHint = (): void => {
     if (findRunningInstance() !== null) {
       console.log(`${INFO} Restart the background instance to apply: ${APP_NAME} stop && ${APP_NAME} start`);
@@ -454,11 +482,16 @@ function configCommand(args: ParsedArgs): void {
   switch (action) {
     case 'show': {
       const effective = loadConfigForCli(args);
-      console.log(dim(`# ${effective.path}${effective.exists ? '' : ' (not created yet, showing defaults)'}`));
+      const changed = overrideKeys(stored.overrides);
+      console.log(dim(`# ${effective.path}${effective.exists ? '' : ' (not created yet)'}`));
+      console.log(dim(`# preset "${effective.config.preset}"${changed.length > 0 ? `, overrides: ${changed.join(', ')}` : ', no overrides'}`));
       console.log(JSON.stringify(effective.config, null, 2));
       for (const warning of effective.warnings) console.log(`${WARN} ${warning}`);
       return;
     }
+    case 'presets':
+      printPresets(stored.config.preset);
+      return;
     case 'path':
       console.log(stored.path);
       return;
@@ -473,20 +506,23 @@ function configCommand(args: ParsedArgs): void {
     case 'set': {
       const raw = valueParts.join(' ');
       if (!key || raw.length === 0) fail(`usage: ${APP_NAME} config set <key> <value>`);
-      const next = withConfigValue(stored.config, key, raw);
-      saveConfig(next, stored.path);
-      console.log(`${OK} ${key} = ${formatValue(getConfigValue(next, key))}`);
+      const next = withOverride(stored.overrides, key, raw);
+      save(next);
+      const effective = mergeConfig(next);
+      console.log(`${OK} ${key} = ${formatValue(getConfigValue(effective, key))}`);
+      if (key === 'preset') printPresets(effective.preset);
       restartHint();
       return;
     }
     case 'reset': {
       if (key) {
-        const next = withDefaultValue(stored.config, key);
-        saveConfig(next, stored.path);
-        console.log(`${OK} ${key} reset to ${formatValue(getConfigValue(next, key))}`);
+        const next = withoutOverride(stored.overrides, key);
+        save(next);
+        console.log(`${OK} ${key} back to ${formatValue(getConfigValue(mergeConfig(next), key))}`);
       } else {
-        saveConfig({ ...structuredClone(DEFAULT_CONFIG), clientId: stored.config.clientId }, stored.path);
-        console.log(`${OK} Config reset to defaults (client id kept): ${stored.path}`);
+        const next: Overrides = hasStoredClientId(stored.overrides) ? { clientId: stored.overrides.clientId } : {};
+        save(next);
+        console.log(`${OK} Config reset to the generic preset${hasStoredClientId(next) ? ' (client id kept)' : ''}: ${stored.path}`);
       }
       restartHint();
       return;
@@ -495,19 +531,20 @@ function configCommand(args: ParsedArgs): void {
       if (stored.exists) {
         console.log(`${INFO} Config already exists: ${stored.path}`);
       } else {
-        saveConfig(stored.config, stored.path);
+        save(initial);
         console.log(`${OK} Created ${stored.path}`);
+        console.log(`${INFO} Add only the keys you want to change. "${APP_NAME} config show" prints the effective config.`);
       }
       return;
     }
     case 'open': {
-      if (!stored.exists) saveConfig(stored.config, stored.path);
+      if (!stored.exists) save(initial);
       openInEditor(stored.path);
       console.log(`${OK} Opening ${stored.path}`);
       return;
     }
     default:
-      fail(`unknown config action "${action}". Use show, get, set, reset, path, keys, init or open.`);
+      fail(`unknown config action "${action}". Use show, get, set, reset, presets, path, keys, init or open.`);
   }
 }
 
