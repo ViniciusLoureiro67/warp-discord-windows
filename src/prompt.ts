@@ -107,8 +107,8 @@ async function selectWithArrows<T>(question: string, options: SelectOption<T>[],
       const key = data.toString('utf8');
       if (key === '') return finish(null); // Ctrl+C
       if (key === '\r' || key === '\n') return finish(index);
-      if (key === `${CSI}A` || key === 'k') index = (index - 1 + options.length) % options.length;
-      else if (key === `${CSI}B` || key === 'j') index = (index + 1) % options.length;
+      if (key === `${CSI}A` || key === 'OA' || key === 'k') index = (index - 1 + options.length) % options.length;
+      else if (key === `${CSI}B` || key === 'OB' || key === 'j') index = (index + 1) % options.length;
       else if (/^[1-9]$/.test(key) && Number(key) <= options.length) index = Number(key) - 1;
       else return;
       draw(false);
