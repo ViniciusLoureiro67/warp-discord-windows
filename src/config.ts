@@ -6,7 +6,13 @@ import type { ActivityButton } from './discord/ipc.js';
 import { getConfigPath, type Env } from './paths.js';
 
 export interface PresenceText {
-  /** Top line when the window title is hidden or empty. */
+  /** Top line while the shell sits at the prompt; placeholders: {folder}, {path}, {title}. */
+  directory: string;
+  /** Top line while a command runs; placeholders: {program}, {command}, {title}. */
+  command: string;
+  /** Top line for tools that name the session (Claude Code and friends); placeholder: {title}. */
+  task: string;
+  /** Top line when the window title is hidden, empty or not understood. */
   noTitle: string;
   /** Bottom line while Warp is the foreground window. */
   focused: string;
@@ -55,6 +61,9 @@ export const DEFAULT_CONFIG: Config = {
   smallImageText: 'Windows',
   buttons: [],
   text: {
+    directory: 'Working in {folder}',
+    command: 'Running {program}',
+    task: 'Working on {title}',
     noTitle: 'In the terminal',
     focused: 'Focused',
     background: 'In the background',

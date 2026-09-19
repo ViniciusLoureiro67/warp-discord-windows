@@ -16,6 +16,17 @@ export {
   type ActivityButton,
 } from './discord/ipc.js';
 export { createLogger, silentLogger, type Logger } from './logger.js';
-export { buildActivity, normalizeTitle, presenceMode, type PresenceInput, type PresenceMode } from './presence.js';
+export {
+  buildActivity,
+  classifyTitle,
+  describeTitle,
+  normalizeTitle,
+  presenceMode,
+  renderTemplate,
+  type PresenceInput,
+  type PresenceMode,
+  type TitleInfo,
+  type TitleKind,
+} from './presence.js';
 export { runPresence, type RunnerOptions } from './runner.js';
 export type { WarpSnapshot, WarpWindow } from './win32/warp.js';
