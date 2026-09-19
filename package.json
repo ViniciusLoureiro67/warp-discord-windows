@@ -45,7 +45,7 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsc -p tsconfig.json --watch",
     "pretest": "npm run build",
-    "test": "node --test dist",
+    "test": "node scripts/run-tests.mjs",
     "start": "node bin/warp-discord-windows.js run",
     "prepublishOnly": "npm run build"
   },
