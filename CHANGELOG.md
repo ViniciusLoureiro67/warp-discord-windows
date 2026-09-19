@@ -5,6 +5,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-09-19
+
+First release.
+
 ### Added
 
 - Discord Rich Presence for Warp on Windows: shows the Warp window title, whether Warp is focused, in the background or idle, and an elapsed timer.
@@ -21,3 +25,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Home directory is replaced by `~` and CLI spinner glyphs are stripped from titles before they are interpreted.
 - Built-in Discord application ("Warp"), so nothing needs to be created in the Developer Portal.
 - Patient handshake: Discord only answers a new Rich Presence handshake about 30 s after the previous session closed, so the client waits and says why instead of reporting Discord as not running.
+
+[Unreleased]: https://github.com/ViniciusLoureiro67/warp-discord-windows/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/ViniciusLoureiro67/warp-discord-windows/releases/tag/v0.1.0
