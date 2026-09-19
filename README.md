@@ -18,7 +18,7 @@
 ```
 ┌──────────────────────────────────────────┐
 │  Playing Warp                            │
-│  ┌────┐  warp-discord-windows            │  ← Warp's window title (your folder or command)
+│  ┌────┐  Working in warp-discord-windows │  ← folder, running program or task, from Warp's title
 │  │ >_ │  Focused                         │  ← Focused · In the background · Idle
 │  └────┘  00:42:17 elapsed                │  ← since Warp was opened
 └──────────────────────────────────────────┘
@@ -42,7 +42,8 @@ is macOS-only and needs a shell hook.
 - **Focus aware.** Shows *Focused* while Warp is the active window, *In the background* while you are elsewhere, and clears itself when Warp closes.
 - **Idle detection.** After a few minutes without keyboard or mouse input the status flips to *Idle* (configurable, or off).
 - **Elapsed timer** counting from the moment Warp was opened.
-- **Privacy first.** Only Warp's own window title is read. Your home directory is shown as `~`, and a single switch hides the title completely.
+- **Readable, not raw.** The first line says *Working in my-app*, *Running npm run* or *Working on Fix the login bug* (for tools like Claude Code that name the session) instead of dumping the window title. Every wording is a template you can change.
+- **Privacy first.** Only Warp's own window title is read, commands are reduced to the program name by default (no `curl -H "Authorization: ..."` on your profile), your home directory is shown as `~`, and a single switch hides the title completely.
 - **Survives everything.** Discord not started yet? Restarted? Warp closed and reopened? The presence catches up on its own with exponential backoff.
 - **Autostart with Windows** through a hidden launcher in your Startup folder. Disable it just as easily.
 - **Configurable** texts, images, activity type and up to two profile buttons, from a JSON file or the CLI.
@@ -116,6 +117,9 @@ Everything has a sensible default; only add the keys you want to change.
   "smallImageText": "Windows",
   "buttons": [],
   "text": {
+    "directory": "Working in {folder}",
+    "command": "Running {program}",
+    "task": "Working on {title}",
     "noTitle": "In the terminal",
     "focused": "Focused",
     "background": "In the background",
@@ -136,7 +140,11 @@ Everything has a sensible default; only add the keys you want to change.
 | `largeImageKey` / `largeImageText` | `warp` / `Warp Terminal` | Art asset key uploaded to the Discord application and its hover text. Empty key hides the image. |
 | `smallImageKey` / `smallImageText` | `windows` / `Windows` | The small badge over the large image. |
 | `buttons` | `[]` | Up to two `{ "label", "url" }` buttons. Discord shows them to *other* people, never to you. |
-| `text.*` | see above | The texts used for each state. |
+| `text.directory` | `Working in {folder}` | First line while the shell sits at the prompt. |
+| `text.command` | `Running {program}` | First line while a command runs. |
+| `text.task` | `Working on {title}` | First line when a tool names the session (Claude Code and similar). |
+| `text.noTitle` | `In the terminal` | First line when the title is hidden, empty or not understood. |
+| `text.focused` / `text.background` / `text.idle` | `Focused` / `In the background` / `Idle` | Second line for each state. |
 
 From the CLI:
 
@@ -152,12 +160,45 @@ Restart the background instance after changing the config: `warp-discord-windows
 
 ## What ends up on your profile
 
-- **First line:** Warp's window title. With Warp's defaults that is your current directory or the running command; tools like Claude Code, `npm` or `cargo` set their own titles. Progress spinner glyphs are stripped and your home directory becomes `~`.
-- **Second line:** `Focused`, `In the background` or `Idle`.
-- **Timer:** since Warp was first seen in this session.
-- **Images and buttons:** whatever the Discord application has and whatever you configured.
+**First line.** Warp's window title, turned into a sentence. Warp titles the tab with the current directory while the shell waits, with the command while one runs, and some tools (Claude Code, for one) name the tab after the session. Each case has its own template:
 
-Only Warp windows are inspected. Titles of other windows (browser tabs, chats, documents) are never read, logged or sent anywhere.
+| Warp title | Kind | Default text |
+| --- | --- | --- |
+| `~\projects\warp-discord-windows` | directory | `Working in warp-discord-windows` |
+| `npm run dev` | command | `Running npm run` |
+| `node bin/server.js --port 3000` | command | `Running node server` |
+| `✳ Fix the login bug` | task | `Working on Fix the login bug` |
+| `Warp` (shell still starting) or hidden | none | `In the terminal` |
+
+Placeholders you can use in `text.directory`, `text.command` and `text.task`:
+
+| Placeholder | Value |
+| --- | --- |
+| `{folder}` | Last segment of the directory (`warp-discord-windows`) |
+| `{path}` | Whole directory with your home as `~` (`~\projects\warp-discord-windows`) |
+| `{program}` | The program, plus its subcommand for `npm`, `git`, `cargo`, `docker`... (`git commit`) |
+| `{command}` | The full command line. Careful: commands can contain tokens and passwords. |
+| `{title}` | The cleaned title, whatever it is |
+
+A few ideas:
+
+```powershell
+# One fixed description, no matter what
+warp-discord-windows config set text.directory "Terminal developer"
+warp-discord-windows config set text.command "Terminal developer"
+
+# Show the full path and the full command
+warp-discord-windows config set text.directory "📁 {path}"
+warp-discord-windows config set text.command "$ {command}"
+
+# Hide the title entirely
+warp-discord-windows config set showWindowTitle false
+warp-discord-windows config set text.noTitle "Somewhere in a terminal"
+```
+
+**Second line:** `Focused`, `In the background` or `Idle`. **Timer:** since Warp was first seen in this session. **Images and buttons:** whatever the Discord application has and whatever you configured.
+
+Only Warp windows are inspected. Titles of other windows (browser tabs, chats, documents) are never read, logged or sent anywhere. Progress spinner glyphs are stripped before anything is compared or sent.
 
 ## How it works
 
