@@ -13,16 +13,11 @@
   <img alt="Node" src="https://img.shields.io/badge/node-%3E%3D18-339933">
 </p>
 
-<!-- TODO(maintainer): add docs/screenshot.png of the Discord profile card and reference it here. -->
-
-```
-┌──────────────────────────────────────────┐
-│  Playing Warp                            │
-│  ┌────┐  In the terminal                 │  ← generic by default: never your folders or commands
-│  │ >_ │  Focused                         │  ← Focused · In the background · Idle
-│  └────┘  00:42:17 elapsed                │  ← since Warp was opened
-└──────────────────────────────────────────┘
-```
+<p align="center">
+  <img src="https://raw.githubusercontent.com/ViniciusLoureiro67/warp-discord-windows/main/docs/screenshot.png" alt="Discord profile card: Playing Warp, Deep in the zone, Multitasking, 8:41 elapsed" width="440">
+  <br>
+  <sub>The <code>fun</code> preset with Warp in the background. The default <code>generic</code> preset reads <em>In the terminal · Focused</em>. Never your folders or commands.</sub>
+</p>
 
 ## Why
 
