@@ -1,0 +1,59 @@
+{
+  "name": "warp-discord-windows",
+  "version": "0.1.0",
+  "description": "Discord Rich Presence for the Warp terminal on Windows. Show what you're doing in Warp right on your Discord profile.",
+  "keywords": [
+    "warp",
+    "warp-terminal",
+    "discord",
+    "discord-rpc",
+    "rich-presence",
+    "presence",
+    "windows",
+    "terminal",
+    "ipc"
+  ],
+  "license": "MIT",
+  "author": "Vinicius Loureiro",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ViniciusLoureiro67/warp-discord-windows.git"
+  },
+  "homepage": "https://github.com/ViniciusLoureiro67/warp-discord-windows#readme",
+  "bugs": {
+    "url": "https://github.com/ViniciusLoureiro67/warp-discord-windows/issues"
+  },
+  "type": "module",
+  "bin": {
+    "warp-discord-windows": "./bin/warp-discord-windows.js"
+  },
+  "main": "./dist/index.js",
+  "files": [
+    "bin",
+    "dist",
+    "!dist/**/*.test.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "win32"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "pretest": "npm run build",
+    "test": "node --test dist",
+    "start": "node bin/warp-discord-windows.js run",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "koffi": "^2.9.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}

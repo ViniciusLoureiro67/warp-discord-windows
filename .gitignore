@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.log
+*.tgz
+.claude/
+.DS_Store
+Thumbs.db
