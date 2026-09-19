@@ -39,7 +39,7 @@ is macOS-only and needs a shell hook.
 ## Features
 
 - **Private by default.** The card says *In the terminal*, *Running a command* or *Working on a task*, plus whether you are focused and for how long. No folder names, no commands, no project names ever leave your machine unless you opt in.
-- **Zero setup.** Install, run, done. No shell hooks, no profile edits, no admin rights.
+- **Zero setup.** Install, pick *Turn it on* in the menu, done. No shell hooks, no profile edits, no admin rights, no terminal left open.
 - **Presets and a fixed phrase.** Pick `generic`, `fun` or `detailed` wording with one command, or set a single line like *Terminal developer* and call it a day.
 - **Focus aware.** *Focused* while Warp is the active window, *In the background* while you are elsewhere, cleared when Warp closes.
 - **Idle detection.** A few minutes without keyboard or mouse input flips the status to *Idle* (configurable, or off).
@@ -47,6 +47,7 @@ is macOS-only and needs a shell hook.
 - **Survives everything.** Discord not started yet? Restarted? Warp closed and reopened? The presence catches up on its own.
 - **Autostart with Windows** through a hidden launcher in your Startup folder. Disable it just as easily.
 - **Lightweight.** One Node.js process, about half a millisecond per poll, updates only sent when something changed.
+- **Live config.** Change the wording while it runs; the instance picks it up in seconds. `stop` shuts it down gracefully over a local control pipe.
 - **`doctor`** tells you exactly what is wrong when something is.
 
 ## Requirements
@@ -63,18 +64,29 @@ npm install -g warp-discord-windows
 warp-discord-windows
 ```
 
-That runs it in the foreground and prints what it is doing. Open Warp, look at your Discord profile, press `Ctrl+C` when you are done.
+The second command opens a small menu:
 
-Prefer not to install anything? `npx warp-discord-windows` works too.
+```
+  Presence   ○ off (not running)
+  Startup    ○ not on startup
+  Wording    preset "generic" (In the terminal · Focused)
 
-To have it running all the time:
-
-```powershell
-warp-discord-windows autostart on
+? What do you want to do?
+❯ Turn it on           Start now and every time you log in to Windows
+  Turn it off          Stop it and remove it from Windows startup
+  Change the wording   Pick a preset or write your own line
+  Check everything     Discord, Warp and the application id
+  Watch it live        Run in this window with logs, Ctrl+C to leave
+  Quit
 ```
 
-This starts it in the background right away and again every time you log in to Windows.
-`warp-discord-windows autostart off` reverts it.
+Pick **Turn it on** and you are done: it runs in the background now and again every time you log in to Windows, no terminal needed. Discord shows *Playing Warp* within about 30 seconds.
+
+Prefer not to install anything? `npx warp-discord-windows` opens the same menu.
+
+**Not a terminal person?** Download the repository, double-click `setup.cmd`. It installs what it needs, builds once and opens the menu.
+
+**Prefer plain commands?** Everything in the menu is a command too: `warp-discord-windows autostart on` (start now and with Windows), `stop`, `status`, `config set preset fun`.
 
 > **Note**
 > Rich Presence needs a Discord *application id*. One is built in (the "Warp" application this
@@ -85,13 +97,14 @@ This starts it in the background right away and again every time you log in to W
 
 | Command | What it does |
 | --- | --- |
-| `warp-discord-windows` / `run` | Run in the foreground and show what happens. `--verbose` prints window titles and every payload sent to Discord. |
+| `warp-discord-windows` / `menu` | The menu: turn it on or off, change the wording, check everything. (Outside a terminal, the bare command prints the help.) |
+| `run` | Run in the foreground and show what happens. `--verbose` prints window titles and every payload sent to Discord. |
 | `start` | Run in the background and return to the prompt. |
-| `stop` | Stop the background instance. Discord clears the presence immediately. |
+| `stop` | Stop the background instance gracefully. The presence is cleared right away. |
 | `status` | One screen with the instance, autostart, Discord and Warp state. |
 | `doctor` | Check Windows, Node, native bindings, Warp, Discord and the application id, including a real handshake. |
 | `autostart on` / `off` / `status` | Manage the login launcher. |
-| `config show` / `presets` / `get <key>` / `set <key> <value>` / `reset [key]` / `path` / `open` / `keys` / `init` | Read and change the configuration. |
+| `config show` / `presets` / `get <key>` / `set <key> <value>` / `reset [key]` / `path` / `open` / `keys` / `init` | Read and change the configuration. Changes apply to the running instance within seconds, no restart. |
 | `logs [-n 50]` | Print the last lines of the log file. |
 
 Flags: `--client-id <id>` uses another Discord application for this run, `--background` runs silently (used by autostart), `--version`, `--help`.
@@ -139,7 +152,7 @@ Templates may contain placeholders. They are filled from Warp's window title, so
 | `{command}` | The full command line. Careful: commands can contain tokens and passwords. |
 | `{title}` | The cleaned window title, whatever it is |
 
-Restart the background instance after changing anything: `warp-discord-windows stop` then `start`.
+Every change is picked up by the running instance within a couple of seconds; nothing to restart.
 
 ## Configuration
 
