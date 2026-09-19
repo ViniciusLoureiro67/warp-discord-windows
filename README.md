@@ -2,7 +2,7 @@
 
 <p align="center">
   Discord Rich Presence for the <a href="https://www.warp.dev">Warp</a> terminal on Windows.<br/>
-  Let people see you're in the terminal: what you're working on, whether you're focused, and for how long.
+  Show that you live in the terminal, without showing what you are doing there.
 </p>
 
 <p align="center">
@@ -18,7 +18,7 @@
 ```
 ┌──────────────────────────────────────────┐
 │  Playing Warp                            │
-│  ┌────┐  Working in warp-discord-windows │  ← folder, running program or task, from Warp's title
+│  ┌────┐  In the terminal                 │  ← generic by default: never your folders or commands
 │  │ >_ │  Focused                         │  ← Focused · In the background · Idle
 │  └────┘  00:42:17 elapsed                │  ← since Warp was opened
 └──────────────────────────────────────────┘
@@ -38,16 +38,15 @@ is macOS-only and needs a shell hook.
 
 ## Features
 
+- **Private by default.** The card says *In the terminal*, *Running a command* or *Working on a task*, plus whether you are focused and for how long. No folder names, no commands, no project names ever leave your machine unless you opt in.
 - **Zero setup.** Install, run, done. No shell hooks, no profile edits, no admin rights.
-- **Focus aware.** Shows *Focused* while Warp is the active window, *In the background* while you are elsewhere, and clears itself when Warp closes.
-- **Idle detection.** After a few minutes without keyboard or mouse input the status flips to *Idle* (configurable, or off).
+- **Presets and a fixed phrase.** Pick `generic`, `fun` or `detailed` wording with one command, or set a single line like *Terminal developer* and call it a day.
+- **Focus aware.** *Focused* while Warp is the active window, *In the background* while you are elsewhere, cleared when Warp closes.
+- **Idle detection.** A few minutes without keyboard or mouse input flips the status to *Idle* (configurable, or off).
 - **Elapsed timer** counting from the moment Warp was opened.
-- **Readable, not raw.** The first line says *Working in my-app*, *Running npm run* or *Working on Fix the login bug* (for tools like Claude Code that name the session) instead of dumping the window title. Every wording is a template you can change.
-- **Privacy first.** Only Warp's own window title is read, commands are reduced to the program name by default (no `curl -H "Authorization: ..."` on your profile), your home directory is shown as `~`, and a single switch hides the title completely.
-- **Survives everything.** Discord not started yet? Restarted? Warp closed and reopened? The presence catches up on its own with exponential backoff.
+- **Survives everything.** Discord not started yet? Restarted? Warp closed and reopened? The presence catches up on its own.
 - **Autostart with Windows** through a hidden launcher in your Startup folder. Disable it just as easily.
-- **Configurable** texts, images, activity type and up to two profile buttons, from a JSON file or the CLI.
-- **Lightweight.** One Node.js process, about half a millisecond per poll, and updates are only sent when something actually changed.
+- **Lightweight.** One Node.js process, about half a millisecond per poll, updates only sent when something changed.
 - **`doctor`** tells you exactly what is wrong when something is.
 
 ## Requirements
@@ -92,38 +91,66 @@ This starts it in the background right away and again every time you log in to W
 | `status` | One screen with the instance, autostart, Discord and Warp state. |
 | `doctor` | Check Windows, Node, native bindings, Warp, Discord and the application id, including a real handshake. |
 | `autostart on` / `off` / `status` | Manage the login launcher. |
-| `config show` / `get <key>` / `set <key> <value>` / `reset [key]` / `path` / `open` / `keys` | Read and change the configuration. |
+| `config show` / `presets` / `get <key>` / `set <key> <value>` / `reset [key]` / `path` / `open` / `keys` / `init` | Read and change the configuration. |
 | `logs [-n 50]` | Print the last lines of the log file. |
 
 Flags: `--client-id <id>` uses another Discord application for this run, `--background` runs silently (used by autostart), `--version`, `--help`.
 
+## Choosing what the card says
+
+The first line depends on what Warp is doing (waiting at the prompt, running a command, or a tool such as Claude Code naming the session). The second line is your focus state. What each situation *says* comes from a preset:
+
+| Preset | Prompt | Command | Task | Focused / Background / Idle |
+| --- | --- | --- | --- | --- |
+| `generic` (default) | In the terminal | Running a command | Working on a task | Focused / In the background / Idle |
+| `fun` | Staring at a blinking cursor | Waiting for a command to finish | Deep in the zone | Locked in / Multitasking / AFK |
+| `detailed` | Working in *warp-discord-windows* | Running *npm run* | Working on *Fix the login bug* | Focused / In the background / Idle |
+
+```powershell
+warp-discord-windows config presets            # see them side by side
+warp-discord-windows config set preset fun
+```
+
+`generic` and `fun` reveal nothing about your work. `detailed` is an explicit opt-in: it includes the folder name, the program name (`git commit`, `npm run`, `node server`, never the full command line) or the task name from Warp's title.
+
+**Just one fixed phrase?**
+
+```powershell
+warp-discord-windows config set firstLine "Terminal developer"
+```
+
+That replaces the first line everywhere. `config reset firstLine` turns it back off.
+
+**Custom wording.** Every text is a template you can override individually, on top of any preset:
+
+```powershell
+warp-discord-windows config set text.prompt "Plotting the next command"
+warp-discord-windows config set text.idle "AFK, probably coffee"
+warp-discord-windows config reset text.prompt        # back to the preset's wording
+```
+
+Templates may contain placeholders. They are filled from Warp's window title, so use them only if you are fine with that information on your profile:
+
+| Placeholder | Value |
+| --- | --- |
+| `{folder}` | Last segment of the current directory (`warp-discord-windows`) |
+| `{path}` | The whole directory with your home as `~` (`~\projects\warp-discord-windows`) |
+| `{program}` | The program, plus its subcommand for `npm`, `git`, `cargo`, `docker`... (`git commit`) |
+| `{command}` | The full command line. Careful: commands can contain tokens and passwords. |
+| `{title}` | The cleaned window title, whatever it is |
+
+Restart the background instance after changing anything: `warp-discord-windows stop` then `start`.
+
 ## Configuration
 
-The config file lives at `%APPDATA%\warp-discord-windows\config.json` and is created on the first `config set`.
-Everything has a sensible default; only add the keys you want to change.
+The config file lives at `%APPDATA%\warp-discord-windows\config.json` and only holds what you changed. Everything else comes from the preset and the defaults; `warp-discord-windows config show` prints the effective result.
 
 ```json
 {
-  "clientId": "",
-  "pollIntervalMs": 2000,
-  "idleAfterMinutes": 5,
-  "showWindowTitle": true,
-  "showInBackground": true,
-  "showElapsedTime": true,
-  "activityType": 0,
-  "largeImageKey": "warp",
-  "largeImageText": "Warp Terminal",
-  "smallImageKey": "windows",
-  "smallImageText": "Windows",
-  "buttons": [],
+  "preset": "fun",
+  "idleAfterMinutes": 10,
   "text": {
-    "directory": "Working in {folder}",
-    "command": "Running {program}",
-    "task": "Working on {title}",
-    "noTitle": "In the terminal",
-    "focused": "Focused",
-    "background": "In the background",
-    "idle": "Idle"
+    "idle": "AFK, probably coffee"
   }
 }
 ```
@@ -131,74 +158,23 @@ Everything has a sensible default; only add the keys you want to change.
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `clientId` | built-in | Discord application id. `WARP_DISCORD_CLIENT_ID` and `--client-id` override it. |
+| `preset` | `generic` | `generic`, `fun` or `detailed`. Decides every text you did not override. |
+| `firstLine` | `""` | A fixed first line that replaces the prompt/command/task texts. Empty means off. |
 | `pollIntervalMs` | `2000` | How often the desktop is inspected. Minimum `500`. |
-| `idleAfterMinutes` | `5` | Minutes without input before the *Idle* text. `0` disables idle detection. |
-| `showWindowTitle` | `true` | Show Warp's window title as the first line. `false` shows `text.noTitle` instead. |
+| `idleAfterMinutes` | `5` | Minutes without input before the idle text. `0` disables idle detection. |
 | `showInBackground` | `true` | Keep the presence while Warp is open but not focused. `false` hides it until you come back. |
 | `showElapsedTime` | `true` | Show the elapsed timer. |
 | `activityType` | `0` | `0` Playing, `2` Listening to, `3` Watching, `5` Competing in. |
 | `largeImageKey` / `largeImageText` | `warp` / `Warp Terminal` | Art asset key uploaded to the Discord application and its hover text. Empty key hides the image. |
 | `smallImageKey` / `smallImageText` | `windows` / `Windows` | The small badge over the large image. |
 | `buttons` | `[]` | Up to two `{ "label", "url" }` buttons. Discord shows them to *other* people, never to you. |
-| `text.directory` | `Working in {folder}` | First line while the shell sits at the prompt. |
-| `text.command` | `Running {program}` | First line while a command runs. |
-| `text.task` | `Working on {title}` | First line when a tool names the session (Claude Code and similar). |
-| `text.noTitle` | `In the terminal` | First line when the title is hidden, empty or not understood. |
-| `text.focused` / `text.background` / `text.idle` | `Focused` / `In the background` / `Idle` | Second line for each state. |
+| `text.prompt` / `text.command` / `text.task` | from preset | First line while waiting at the prompt / running a command / in a named task. |
+| `text.fallback` | from preset | First line when the title is empty or not understood. |
+| `text.focused` / `text.background` / `text.idle` | from preset | Second line for each state. |
 
-From the CLI:
+## What is read, and what is sent
 
-```powershell
-warp-discord-windows config set showWindowTitle false
-warp-discord-windows config set text.focused "Deep in the terminal"
-warp-discord-windows config set idleAfterMinutes 10
-warp-discord-windows config set buttons '[{"label":"My GitHub","url":"https://github.com/you"}]'
-warp-discord-windows config reset text.focused
-```
-
-Restart the background instance after changing the config: `warp-discord-windows stop` then `start`.
-
-## What ends up on your profile
-
-**First line.** Warp's window title, turned into a sentence. Warp titles the tab with the current directory while the shell waits, with the command while one runs, and some tools (Claude Code, for one) name the tab after the session. Each case has its own template:
-
-| Warp title | Kind | Default text |
-| --- | --- | --- |
-| `~\projects\warp-discord-windows` | directory | `Working in warp-discord-windows` |
-| `npm run dev` | command | `Running npm run` |
-| `node bin/server.js --port 3000` | command | `Running node server` |
-| `✳ Fix the login bug` | task | `Working on Fix the login bug` |
-| `Warp` (shell still starting) or hidden | none | `In the terminal` |
-
-Placeholders you can use in `text.directory`, `text.command` and `text.task`:
-
-| Placeholder | Value |
-| --- | --- |
-| `{folder}` | Last segment of the directory (`warp-discord-windows`) |
-| `{path}` | Whole directory with your home as `~` (`~\projects\warp-discord-windows`) |
-| `{program}` | The program, plus its subcommand for `npm`, `git`, `cargo`, `docker`... (`git commit`) |
-| `{command}` | The full command line. Careful: commands can contain tokens and passwords. |
-| `{title}` | The cleaned title, whatever it is |
-
-A few ideas:
-
-```powershell
-# One fixed description, no matter what
-warp-discord-windows config set text.directory "Terminal developer"
-warp-discord-windows config set text.command "Terminal developer"
-
-# Show the full path and the full command
-warp-discord-windows config set text.directory "📁 {path}"
-warp-discord-windows config set text.command "$ {command}"
-
-# Hide the title entirely
-warp-discord-windows config set showWindowTitle false
-warp-discord-windows config set text.noTitle "Somewhere in a terminal"
-```
-
-**Second line:** `Focused`, `In the background` or `Idle`. **Timer:** since Warp was first seen in this session. **Images and buttons:** whatever the Discord application has and whatever you configured.
-
-Only Warp windows are inspected. Titles of other windows (browser tabs, chats, documents) are never read, logged or sent anywhere. Progress spinner glyphs are stripped before anything is compared or sent.
+Only Warp windows are inspected: their titles decide which text to show, that is all. Titles of other windows (browser tabs, chats, documents) are never read, logged or sent anywhere. With the default presets the payload that reaches Discord is exactly the preset text, the focus state and the timer.
 
 ## How it works
 
@@ -260,7 +236,6 @@ Only visible top-level windows count. Run `warp-discord-windows doctor` and open
 ## Roadmap
 
 - [ ] Optional shell hook for the current directory and git branch, independent of the window title
-- [ ] Per-project titles and simple redaction rules (`hideTitlesMatching`)
 - [ ] Hot-reload the config without restarting
 - [ ] Single-file `.exe` release for people without Node.js
 - [ ] System tray icon
