@@ -176,7 +176,7 @@ Only Warp windows are inspected. Titles of other windows (browser tabs, chats, d
 ```
 
 1. **Win32, through [koffi](https://koffi.dev).** koffi is a prebuilt FFI module, so there is nothing to compile on install. Every poll enumerates the visible top-level windows, keeps the ones whose process is `warp.exe`, and checks whether one of them is the foreground window.
-2. **Discord IPC.** Discord's desktop app listens on `\\.\pipe\discord-ipc-0` through `-9`. Frames are `[opcode][length][JSON]`; after a handshake with the application id, `SET_ACTIVITY` commands update the presence. The client in [`src/discord/ipc.ts`](src/discord/ipc.ts) is about 300 lines and has no dependencies.
+2. **Discord IPC.** Discord's desktop app listens on `\\.\pipe\discord-ipc-0` through `-9`. Frames are `[opcode][length][JSON]`; after a handshake with the application id, `SET_ACTIVITY` commands update the presence. The client in [`src/discord/ipc.ts`](src/discord/ipc.ts) is about 300 lines and has no dependencies. One quirk worth knowing: Discord delays a new handshake for about 30 seconds after the previous session on the pipe closed, so the client waits patiently instead of assuming Discord is gone.
 3. **The loop** in [`src/runner.ts`](src/runner.ts) diffs the payload, respects Discord's 15-second update window, reconnects with backoff, and clears the presence when Warp closes or the tool stops.
 
 ## Using your own Discord application
@@ -194,6 +194,9 @@ Create your own only if you want a different name than "Warp" or your own artwor
 
 **Nothing shows up in Discord.**
 Run `warp-discord-windows doctor`. Then check Discord → *User Settings* → *Activity Privacy*: "Share your detected activities with others" must be on. Rich Presence also only works with the desktop app, not the browser.
+
+**"Connected to Discord" only shows up half a minute after `doctor`, `stop`/`start` or a restart.**
+Discord answers a new Rich Presence handshake only about 30 seconds after the previous session on that pipe closed. The pipe accepts instantly, the `READY` reply is what waits. Nothing is wrong; the log says so while it waits, and the presence appears as soon as Discord answers.
 
 **"Invalid Client ID (code 4000)".**
 The application id is wrong or was deleted. Fix it with `config set clientId <id>`.

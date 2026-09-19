@@ -14,3 +14,5 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Autostart at login through a hidden launcher in the Startup folder (no administrator rights needed).
 - JSON config in `%APPDATA%\warp-discord-windows\config.json` with privacy toggles (`showWindowTitle`, `showInBackground`) and custom texts, images and buttons.
 - Home directory is replaced by `~` and CLI spinner glyphs are stripped from titles before they reach Discord.
+- Built-in Discord application ("Warp"), so nothing needs to be created in the Developer Portal.
+- Patient handshake: Discord only answers a new Rich Presence handshake about 30 s after the previous session closed, so the client waits and says why instead of reporting Discord as not running.
