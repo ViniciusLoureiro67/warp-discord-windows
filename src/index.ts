@@ -28,6 +28,8 @@ export {
   type Activity,
   type ActivityButton,
 } from './discord/ipc.js';
+export { CONTROL_PIPE, queryControl, startControlServer, type ControlStatus } from './control.js';
+export { findRunningInstance, queryInstance, stopInstance } from './daemon.js';
 export { createLogger, silentLogger, type Logger } from './logger.js';
 export {
   buildActivity,
@@ -41,5 +43,5 @@ export {
   type TitleInfo,
   type TitleKind,
 } from './presence.js';
-export { runPresence, type RunnerOptions } from './runner.js';
+export { createRunnerState, runPresence, type PresenceClient, type RunnerOptions, type RunnerState } from './runner.js';
 export type { WarpSnapshot, WarpWindow } from './win32/warp.js';

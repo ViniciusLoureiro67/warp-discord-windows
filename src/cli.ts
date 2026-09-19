@@ -19,13 +19,16 @@ import {
   type Config,
   type LoadedConfig,
   type Overrides,
+  type PresetName,
 } from './config.js';
 import { APP_NAME, DISCORD_DEVELOPER_PORTAL, REPO_URL } from './constants.js';
-import { findRunningInstance, removePidFile, stopRunningInstance, writePidFile } from './daemon.js';
+import { startControlServer, type ControlStatus } from './control.js';
+import { findRunningInstance, queryInstance, removePidFile, stopInstance, writePidFile } from './daemon.js';
 import { DiscordIpcClient, DiscordNotRunningError, pipePath } from './discord/ipc.js';
 import { createLogger, supportsColor } from './logger.js';
 import { getAutostartScriptPath, getConfigPath, getLogPath } from './paths.js';
-import { runPresence } from './runner.js';
+import { closePrompts, input, isInteractive, select } from './prompt.js';
+import { createRunnerState, runPresence } from './runner.js';
 import type { WarpSnapshot } from './win32/warp.js';
 
 const require = createRequire(import.meta.url);
@@ -43,6 +46,8 @@ const OK = green('✓');
 const BAD = red('✗');
 const WARN = yellow('!');
 const INFO = dim('·');
+const ON = green('●');
+const OFF = dim('○');
 
 export interface ParsedArgs {
   command: string | undefined;
@@ -99,11 +104,13 @@ Discord Rich Presence for the Warp terminal on Windows.
 ${bold('Usage:')} ${APP_NAME} [command] [options]
 
 ${bold('Commands:')}
-  run                  Run in the foreground and show what happens (default)
+  ${dim('(none)')}               Open the menu in a terminal, or show this help
+  menu                 Turn it on or off, change the wording, check everything (also: setup)
+  run                  Run in this window and show what happens
   start                Run in the background and return to the prompt
   stop                 Stop the background instance
   status               Show the instance, autostart, Discord and Warp state
-  doctor               Check Discord, Warp, the client id and native bindings
+  doctor               Check Discord, Warp, the application id and native bindings
   autostart on|off     Start automatically when you log in to Windows
   config               Show the config (also: get, set, reset, presets, path, open, init)
   logs                 Print the last lines of the log file
@@ -117,8 +124,8 @@ ${bold('Options:')}
   --help, -h           Show this help
 
 ${bold('Examples:')}
-  ${APP_NAME}                                        ${dim('# try it right now')}
-  ${APP_NAME} autostart on                           ${dim('# start with Windows')}
+  ${APP_NAME}                                        ${dim('# the menu: easiest way to set it up')}
+  ${APP_NAME} autostart on                           ${dim('# start now and with Windows')}
   ${APP_NAME} config set preset fun                  ${dim('# other wording, still generic')}
   ${APP_NAME} config set firstLine "Terminal developer"
   ${APP_NAME} config set text.idle "AFK"
@@ -165,6 +172,30 @@ function hasStoredClientId(overrides: Overrides): boolean {
   return typeof overrides.clientId === 'string' && overrides.clientId.trim().length > 0;
 }
 
+function configSignature(file: string): string {
+  try {
+    const stats = fs.statSync(file);
+    return `${stats.mtimeMs}:${stats.size}`;
+  } catch {
+    return 'missing';
+  }
+}
+
+function formatDuration(ms: number): string {
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 1) return 'less than a minute';
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+  if (days > 0) return `${days}d ${hours % 24}h`;
+  if (hours > 0) return `${hours}h ${minutes % 60}m`;
+  return `${minutes}m`;
+}
+
+function formatValue(value: unknown): string {
+  if (typeof value === 'string') return value.length === 0 ? dim('(empty)') : value;
+  return JSON.stringify(value);
+}
+
 async function runCommand(args: ParsedArgs): Promise<void> {
   const background = args.flags.has('background');
   const verbose = args.flags.has('verbose');
@@ -181,9 +212,40 @@ async function runCommand(args: ParsedArgs): Promise<void> {
     process.exit(1);
   }
 
-  const other = findRunningInstance();
+  const other = await findRunningInstance();
   if (other !== null) {
     logger.warn(`Another instance is already running (pid ${other}). Stop it with "${APP_NAME} stop".`);
+    process.exit(background ? 0 : 1);
+  }
+
+  const controller = new AbortController();
+  const state = createRunnerState(loaded.config);
+  const startedAt = Date.now();
+  const stop = (why: string): void => {
+    if (controller.signal.aborted) return;
+    logger.info(`Shutting down (${why})...`);
+    controller.abort();
+  };
+
+  let server: Awaited<ReturnType<typeof startControlServer>>;
+  try {
+    server = await startControlServer({
+      status: (): ControlStatus => ({
+        pid: process.pid,
+        version,
+        startedAt,
+        discordConnected: state.discordConnected,
+        discordUser: state.discordUser,
+        warpRunning: state.warpRunning,
+        warpFocused: state.warpFocused,
+        preset: state.config.preset,
+        firstLine: state.config.firstLine,
+        configPath: loaded.path,
+      }),
+      stop: () => stop('stop requested'),
+    });
+  } catch (error) {
+    logger.warn(`Another instance seems to be running (control pipe busy: ${errorMessage(error)}).`);
     process.exit(background ? 0 : 1);
   }
 
@@ -195,38 +257,31 @@ async function runCommand(args: ParsedArgs): Promise<void> {
   }
 
   writePidFile();
-  const controller = new AbortController();
-  const stop = (): void => {
-    if (controller.signal.aborted) return;
-    logger.info('Shutting down...');
-    controller.abort();
+  process.on('SIGINT', () => stop('Ctrl+C'));
+  process.on('SIGTERM', () => stop('SIGTERM'));
+  process.on('SIGHUP', () => stop('terminal closed'));
+  process.on('SIGBREAK', () => stop('Ctrl+Break'));
+
+  let signature = configSignature(loaded.path);
+  const reloadConfig = (): Config | null => {
+    const next = configSignature(loaded.path);
+    if (next === signature) return null;
+    signature = next;
+    const reloaded = loadConfigForCli(args);
+    for (const warning of reloaded.warnings) logger.warn(`config: ${warning}`);
+    if (!reloaded.config.clientId) {
+      logger.warn('The config has no client id any more; keeping the previous one.');
+      reloaded.config.clientId = state.config.clientId;
+    }
+    return reloaded.config;
   };
-  process.on('SIGINT', stop);
-  process.on('SIGTERM', stop);
-  process.on('SIGHUP', stop);
-  process.on('SIGBREAK', stop);
 
   try {
-    await runPresence({ config: loaded.config, logger, signal: controller.signal });
+    await runPresence({ config: loaded.config, logger, signal: controller.signal, reloadConfig, state });
   } finally {
     removePidFile();
+    server.close();
   }
-}
-
-function startCommand(args: ParsedArgs): void {
-  const loaded = loadConfigForCli(args);
-  if (!loaded.config.clientId) {
-    printMissingClientId();
-    process.exit(1);
-  }
-  const other = findRunningInstance();
-  if (other !== null) {
-    console.log(`${INFO} Already running in the background (pid ${other}).`);
-    return;
-  }
-  const child = spawnBackground(loaded.config.clientId !== loadStoredConfig().config.clientId ? loaded.config.clientId : null);
-  console.log(`${OK} Started in the background (pid ${child}).`);
-  console.log(`${INFO} Follow along with "${APP_NAME} logs", stop with "${APP_NAME} stop".`);
 }
 
 /** Spawn a detached, windowless copy of this CLI running `run --background`. Returns its pid. */
@@ -241,13 +296,53 @@ function spawnBackground(clientId: string | null): number | undefined {
   return child.pid;
 }
 
-function stopCommand(): void {
-  const pid = stopRunningInstance();
-  if (pid === null) {
+async function waitForInstance(timeoutMs: number): Promise<ControlStatus | null> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const status = await queryInstance();
+    if (status) return status;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return null;
+}
+
+/** Start in the background unless already running. Returns the pid, or null when nothing was started. */
+async function ensureRunning(args: ParsedArgs, quiet = false): Promise<number | null> {
+  const loaded = loadConfigForCli(args);
+  if (!loaded.config.clientId) {
+    printMissingClientId();
+    return null;
+  }
+  const running = await findRunningInstance();
+  if (running !== null) {
+    if (!quiet) console.log(`${INFO} Already running in the background (pid ${running}).`);
+    return running;
+  }
+  const flagged = args.flags.get('client-id');
+  const pid = spawnBackground(typeof flagged === 'string' ? flagged : null);
+  const status = await waitForInstance(4000);
+  return status?.pid ?? pid ?? null;
+}
+
+async function startCommand(args: ParsedArgs): Promise<void> {
+  const before = await findRunningInstance();
+  const pid = await ensureRunning(args);
+  if (pid === null || before !== null) return;
+  console.log(`${OK} Started in the background (pid ${pid}).`);
+  console.log(`${INFO} Follow along with "${APP_NAME} logs", stop with "${APP_NAME} stop".`);
+}
+
+async function stopCommand(): Promise<void> {
+  const result = await stopInstance();
+  if (result === null) {
     console.log(`${INFO} No background instance is running.`);
     return;
   }
-  console.log(`${OK} Stopped the background instance (pid ${pid}). Discord clears the presence right away.`);
+  console.log(
+    result.graceful
+      ? `${OK} Stopped the background instance (pid ${result.pid}). Presence cleared.`
+      : `${OK} Stopped the background instance (pid ${result.pid}, it had to be killed). Discord clears the presence right away.`,
+  );
 }
 
 /** Which `\\.\pipe\discord-ipc-N` pipes exist right now. */
@@ -287,10 +382,45 @@ function describeClientId(config: Config, loadedFromFile: boolean): string {
   return `${config.clientId} ${dim(`(${source})`)}`;
 }
 
+function describeWording(config: Config): string {
+  if (config.firstLine) return `fixed line ${bold(`"${config.firstLine}"`)}`;
+  return `preset ${bold(`"${config.preset}"`)} ${dim(`(${config.text.prompt} · ${config.text.focused})`)}`;
+}
+
+interface Summary {
+  instance: ControlStatus | null;
+  pid: number | null;
+  autostart: boolean;
+  config: LoadedConfig;
+  stored: LoadedConfig;
+}
+
+async function summarize(args: ParsedArgs): Promise<Summary> {
+  const instance = await queryInstance();
+  const pid = instance?.pid ?? (await findRunningInstance());
+  return { instance, pid, autostart: isAutostartEnabled(), config: loadConfigForCli(args), stored: loadStoredConfig() };
+}
+
+function presenceLine(summary: Summary): string {
+  const { instance, pid } = summary;
+  if (instance) {
+    const discord = instance.discordConnected
+      ? `Discord connected${instance.discordUser ? ` as @${instance.discordUser}` : ''}`
+      : 'waiting for Discord';
+    return `${ON} on ${dim(`(pid ${instance.pid}, up ${formatDuration(Date.now() - instance.startedAt)}, ${discord})`)}`;
+  }
+  if (pid !== null) return `${ON} on ${dim(`(pid ${pid}, older version without status reporting)`)}`;
+  return `${OFF} off ${dim('(not running)')}`;
+}
+
+function printSummary(summary: Summary): void {
+  console.log(`  ${'Presence'.padEnd(10)} ${presenceLine(summary)}`);
+  console.log(`  ${'Startup'.padEnd(10)} ${summary.autostart ? `${ON} starts with Windows` : `${OFF} not on startup`}`);
+  console.log(`  ${'Wording'.padEnd(10)} ${describeWording(summary.stored.config)}`);
+}
+
 async function statusCommand(args: ParsedArgs): Promise<void> {
-  const loaded = loadConfigForCli(args);
-  const stored = loadStoredConfig();
-  const instance = findRunningInstance();
+  const summary = await summarize(args);
   const pipes = discordPipes();
   const { snapshot, error } = await loadSnapshot();
 
@@ -300,17 +430,16 @@ async function statusCommand(args: ParsedArgs): Promise<void> {
       : !snapshot.running
         ? `${INFO} not running`
         : snapshot.focused
-          ? `${OK} focused${snapshot.title ? ` ${dim(`"${snapshot.title}"`)}` : ''}`
-          : `${OK} running in the background${snapshot.title ? ` ${dim(`"${snapshot.title}"`)}` : ''}`;
+          ? `${OK} focused`
+          : `${OK} running in the background`;
 
   console.log(bold(`${APP_NAME} v${version}`));
-  console.log(`  ${'Background instance'.padEnd(20)} ${instance === null ? `${INFO} not running` : `${OK} running (pid ${instance})`}`);
-  console.log(`  ${'Autostart'.padEnd(20)} ${isAutostartEnabled() ? `${OK} enabled` : `${INFO} disabled`}`);
-  console.log(`  ${'Discord'.padEnd(20)} ${pipes.length > 0 ? `${OK} running (pipe ${pipes.join(', ')})` : `${BAD} not running`}`);
-  console.log(`  ${'Warp'.padEnd(20)} ${warpLine}`);
-  console.log(`  ${'Client id'.padEnd(20)} ${describeClientId(loaded.config, hasStoredClientId(stored.overrides))}`);
-  console.log(`  ${'Config'.padEnd(20)} ${loaded.path}${loaded.exists ? '' : dim(' (defaults)')}`);
-  for (const warning of loaded.warnings) console.log(`  ${WARN} config: ${warning}`);
+  printSummary(summary);
+  console.log(`  ${'Discord'.padEnd(10)} ${pipes.length > 0 ? `${OK} running (pipe ${pipes.join(', ')})` : `${BAD} not running`}`);
+  console.log(`  ${'Warp'.padEnd(10)} ${warpLine}`);
+  console.log(`  ${'Client id'.padEnd(10)} ${describeClientId(summary.config.config, hasStoredClientId(summary.stored.overrides))}`);
+  console.log(`  ${'Config'.padEnd(10)} ${summary.config.path}${summary.config.exists ? '' : dim(' (defaults)')}`);
+  for (const warning of summary.config.warnings) console.log(`  ${WARN} config: ${warning}`);
 }
 
 interface DoctorCheck {
@@ -319,7 +448,7 @@ interface DoctorCheck {
   detail?: string;
 }
 
-async function doctorCommand(args: ParsedArgs): Promise<void> {
+async function doctorCommand(args: ParsedArgs, exitOnProblems = true): Promise<void> {
   const checks: DoctorCheck[] = [];
   const loaded = loadConfigForCli(args);
 
@@ -331,7 +460,7 @@ async function doctorCommand(args: ParsedArgs): Promise<void> {
   checks.push({
     ok: snapshot !== null,
     label: 'Native bindings (koffi + Win32)',
-    detail: snapshot === null ? error ?? undefined : 'user32/kernel32 loaded',
+    detail: snapshot === null ? (error ?? undefined) : 'user32/kernel32 loaded',
   });
 
   const warpPaths = [
@@ -348,7 +477,7 @@ async function doctorCommand(args: ParsedArgs): Promise<void> {
     checks.push({
       ok: null,
       label: 'Warp right now',
-      detail: !snapshot.running ? 'not running' : snapshot.focused ? `focused, title "${snapshot.title ?? ''}"` : `in the background, title "${snapshot.title ?? ''}"`,
+      detail: !snapshot.running ? 'not running' : snapshot.focused ? 'focused' : 'in the background',
     });
   }
 
@@ -393,8 +522,13 @@ async function doctorCommand(args: ParsedArgs): Promise<void> {
     }
   }
 
-  const instance = findRunningInstance();
-  checks.push({ ok: null, label: 'Background instance', detail: instance === null ? 'not running' : `running (pid ${instance})` });
+  const instance = await queryInstance();
+  const pid = instance?.pid ?? (await findRunningInstance());
+  checks.push({
+    ok: null,
+    label: 'Background instance',
+    detail: pid === null ? 'not running' : `running (pid ${pid}${instance?.discordConnected ? ', Discord connected' : ''})`,
+  });
   checks.push({ ok: null, label: 'Autostart', detail: isAutostartEnabled() ? `enabled (${getAutostartScriptPath()})` : 'disabled' });
 
   console.log(bold(`${APP_NAME} v${version} doctor\n`));
@@ -404,33 +538,49 @@ async function doctorCommand(args: ParsedArgs): Promise<void> {
   }
   const failed = checks.filter((check) => check.ok === false).length;
   console.log(failed === 0 ? `\n${OK} Everything looks good.` : `\n${BAD} ${failed} problem(s) found.`);
-  if (failed > 0) process.exit(1);
+  if (failed > 0 && exitOnProblems) process.exit(1);
 }
 
-function autostartCommand(args: ParsedArgs): void {
+async function turnOn(args: ParsedArgs): Promise<void> {
+  const loaded = loadConfigForCli(args);
+  if (!loaded.config.clientId) {
+    printMissingClientId();
+    return;
+  }
+  const result = enableAutostart();
+  for (const warning of result.warnings) console.log(`${WARN} ${warning}`);
+  const already = await findRunningInstance();
+  const pid = await ensureRunning(args, true);
+  if (already !== null) {
+    console.log(`${OK} Already running (pid ${already}), and it will start with Windows from now on.`);
+  } else if (pid !== null) {
+    console.log(`${OK} Running now (pid ${pid}) and on every login.`);
+  }
+  console.log(`${INFO} Discord shows the presence within about 30 seconds. You can close this window.`);
+}
+
+async function turnOff(): Promise<void> {
+  const stopped = await stopInstance();
+  const removed = disableAutostart();
+  if (stopped) console.log(`${OK} Stopped (pid ${stopped.pid}). Presence cleared.`);
+  if (removed) console.log(`${OK} Removed from Windows startup.`);
+  if (!stopped && !removed) console.log(`${INFO} It was not running and was not on startup. Nothing to do.`);
+}
+
+async function autostartCommand(args: ParsedArgs): Promise<void> {
   const [action = 'status'] = args.positional;
   switch (action) {
     case 'on':
-    case 'enable': {
-      const result = enableAutostart();
-      console.log(`${OK} Autostart enabled: ${result.path}`);
-      for (const warning of result.warnings) console.log(`${WARN} ${warning}`);
-      if (findRunningInstance() === null) {
-        const loaded = loadConfigForCli(args);
-        if (loaded.config.clientId) {
-          const pid = spawnBackground(null);
-          console.log(`${OK} Started in the background now too (pid ${pid}).`);
-        } else {
-          console.log(`${WARN} No client id configured yet, so nothing was started. See "${APP_NAME} doctor".`);
-        }
-      }
+    case 'enable':
+      await turnOn(args);
       return;
-    }
     case 'off':
     case 'disable': {
       const removed = disableAutostart();
       console.log(removed ? `${OK} Autostart disabled.` : `${INFO} Autostart was not enabled.`);
-      if (findRunningInstance() !== null) console.log(`${INFO} The current background instance keeps running; stop it with "${APP_NAME} stop".`);
+      if ((await findRunningInstance()) !== null) {
+        console.log(`${INFO} The current instance keeps running; stop it with "${APP_NAME} stop".`);
+      }
       return;
     }
     case 'status':
@@ -443,14 +593,15 @@ function autostartCommand(args: ParsedArgs): void {
   }
 }
 
-function formatValue(value: unknown): string {
-  if (typeof value === 'string') return value.length === 0 ? dim('(empty)') : value;
-  return JSON.stringify(value);
-}
-
 function openInEditor(file: string): void {
   const child = spawn('cmd.exe', ['/c', 'start', '""', file], { detached: true, stdio: 'ignore', windowsHide: true });
   child.unref();
+}
+
+function presetHint(name: PresetName): string {
+  const text = PRESETS[name];
+  const sample = `${text.prompt} · ${text.command} · ${text.task}`;
+  return name === 'detailed' ? `${sample} (names from your terminal)` : sample;
 }
 
 function printPresets(current: string): void {
@@ -461,25 +612,98 @@ function printPresets(current: string): void {
   };
   for (const name of PRESET_NAMES) {
     const text = PRESETS[name];
-    const marker = name === current ? green('●') : dim('○');
+    const marker = name === current ? ON : OFF;
     console.log(`${marker} ${bold(name)} ${dim(`(${notes[name]})`)}`);
     console.log(`    ${text.prompt} ${dim('·')} ${text.command} ${dim('·')} ${text.task}`);
     console.log(`    ${text.focused} ${dim('·')} ${text.background} ${dim('·')} ${text.idle}`);
   }
 }
 
-function configCommand(args: ParsedArgs): void {
+async function applyHint(): Promise<void> {
+  const running = (await findRunningInstance()) !== null;
+  console.log(running ? `${INFO} The running instance applies it within a few seconds.` : `${INFO} It will be used the next time it runs.`);
+}
+
+async function changeWording(): Promise<void> {
+  const stored = loadStoredConfig();
+  const current = stored.config.firstLine ? 'fixed' : stored.config.preset;
+  const options = [
+    ...PRESET_NAMES.map((name) => ({ label: name, hint: presetHint(name), value: name as string })),
+    {
+      label: 'A fixed line',
+      hint: stored.config.firstLine ? `now "${stored.config.firstLine}"` : 'for example "Terminal developer"',
+      value: 'fixed',
+    },
+    { label: 'Keep as is', value: 'keep' },
+  ];
+  const choice = await select(
+    'How should the first line read?',
+    options,
+    Math.max(0, options.findIndex((option) => option.value === current)),
+  );
+  if (choice === 'keep') return;
+
+  let next = stored.overrides;
+  if (choice === 'fixed') {
+    const line = await input('Your line', stored.config.firstLine || 'Terminal developer');
+    next = withOverride(next, 'firstLine', line);
+  } else {
+    next = withoutOverride(next, 'firstLine');
+    next = withOverride(next, 'preset', choice);
+  }
+  saveOverrides(next, stored.path);
+  const effective = mergeConfig(next);
+  console.log(`${OK} Saved. The card will read ${bold(`"${effective.firstLine || effective.text.prompt}"`)} / ${bold(`"${effective.text.focused}"`)}.`);
+  await applyHint();
+}
+
+async function menuCommand(args: ParsedArgs): Promise<void> {
+  try {
+    for (;;) {
+      console.log(`\n${bold(`${APP_NAME} v${version}`)} ${dim('— Discord Rich Presence for Warp')}`);
+      printSummary(await summarize(args));
+      console.log();
+      const action = await select('What do you want to do?', [
+        { label: 'Turn it on', hint: 'Start now and every time you log in to Windows', value: 'on' },
+        { label: 'Turn it off', hint: 'Stop it and remove it from Windows startup', value: 'off' },
+        { label: 'Change the wording', hint: 'Pick a preset or write your own line', value: 'wording' },
+        { label: 'Check everything', hint: 'Discord, Warp and the application id', value: 'doctor' },
+        { label: 'Watch it live', hint: 'Run in this window with logs, Ctrl+C to leave', value: 'run' },
+        { label: 'Quit', value: 'quit' },
+      ]);
+      switch (action) {
+        case 'on':
+          await turnOn(args);
+          break;
+        case 'off':
+          await turnOff();
+          break;
+        case 'wording':
+          await changeWording();
+          break;
+        case 'doctor':
+          await doctorCommand(args, false);
+          break;
+        case 'run':
+          closePrompts();
+          await runCommand(args);
+          return;
+        default:
+          return;
+      }
+    }
+  } catch (error) {
+    if (errorMessage(error) !== 'end of input') throw error;
+  } finally {
+    closePrompts();
+  }
+}
+
+async function configCommand(args: ParsedArgs): Promise<void> {
   const [action = 'show', key, ...valueParts] = args.positional;
   const stored = loadStoredConfig();
   const initial: Overrides = { preset: 'generic' };
   const save = (next: Overrides): void => saveOverrides(next, stored.path);
-  const restartHint = (): void => {
-    if (findRunningInstance() !== null) {
-      console.log(
-        `${INFO} Restart the running instance to apply: ${APP_NAME} stop && ${APP_NAME} start (or Ctrl+C and run again).`,
-      );
-    }
-  };
 
   switch (action) {
     case 'show': {
@@ -513,7 +737,7 @@ function configCommand(args: ParsedArgs): void {
       const effective = mergeConfig(next);
       console.log(`${OK} ${key} = ${formatValue(getConfigValue(effective, key))}`);
       if (key === 'preset') printPresets(effective.preset);
-      restartHint();
+      await applyHint();
       return;
     }
     case 'reset': {
@@ -526,7 +750,7 @@ function configCommand(args: ParsedArgs): void {
         save(next);
         console.log(`${OK} Config reset to the generic preset${hasStoredClientId(next) ? ' (client id kept)' : ''}: ${stored.path}`);
       }
-      restartHint();
+      await applyHint();
       return;
     }
     case 'init': {
@@ -580,15 +804,22 @@ export async function main(argv: string[]): Promise<void> {
   }
 
   try {
-    switch (args.command ?? 'run') {
+    switch (args.command ?? (isInteractive() ? 'menu' : 'help')) {
+      case 'help':
+        printHelp();
+        break;
+      case 'menu':
+      case 'setup':
+        await menuCommand(args);
+        break;
       case 'run':
         await runCommand(args);
         break;
       case 'start':
-        startCommand(args);
+        await startCommand(args);
         break;
       case 'stop':
-        stopCommand();
+        await stopCommand();
         break;
       case 'status':
         await statusCommand(args);
@@ -597,10 +828,10 @@ export async function main(argv: string[]): Promise<void> {
         await doctorCommand(args);
         break;
       case 'autostart':
-        autostartCommand(args);
+        await autostartCommand(args);
         break;
       case 'config':
-        configCommand(args);
+        await configCommand(args);
         break;
       case 'logs':
         logsCommand(args);
