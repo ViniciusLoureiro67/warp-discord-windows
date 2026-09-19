@@ -25,7 +25,7 @@
   },
   "type": "module",
   "bin": {
-    "warp-discord-windows": "./bin/warp-discord-windows.js"
+    "warp-discord-windows": "bin/warp-discord-windows.js"
   },
   "main": "./dist/index.js",
   "files": [
