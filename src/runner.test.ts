@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { DEFAULT_CONFIG, type Config } from './config.js';
+import { DEFAULT_CONFIG, mergeConfig, type Config } from './config.js';
 import { DiscordNotRunningError, type Activity } from './discord/ipc.js';
 import { silentLogger } from './logger.js';
-import { runPresence, type PresenceClient } from './runner.js';
+import { createRunnerState, runPresence, type PresenceClient } from './runner.js';
 import type { WarpSnapshot } from './win32/warp.js';
 
 class FakeClient implements PresenceClient {
@@ -14,7 +14,10 @@ class FakeClient implements PresenceClient {
   readonly sent: Array<Activity | null> = [];
   private readonly listeners: Array<(reason: string, wasReady: boolean) => void> = [];
 
-  constructor(private readonly shouldConnect: boolean) {}
+  constructor(
+    private readonly shouldConnect: boolean,
+    readonly clientId = '123456789012345678',
+  ) {}
 
   async connect(): Promise<void> {
     if (!this.shouldConnect) throw new DiscordNotRunningError([{ index: 0, error: new Error('ENOENT') }]);
@@ -59,6 +62,8 @@ interface Scenario {
   /** Called before each snapshot with its 1-based number. */
   beforeSnapshot?: (tick: number) => void;
   config?: Config;
+  reloadConfig?: () => Config | null;
+  state?: ReturnType<typeof createRunnerState>;
 }
 
 /**
@@ -75,6 +80,8 @@ async function runScenario(scenario: Scenario): Promise<void> {
     logger: silentLogger,
     signal: controller.signal,
     createClient: scenario.createClient,
+    reloadConfig: scenario.reloadConfig,
+    state: scenario.state,
     now: () => (clock += 70_000),
     snapshot: () => {
       const tick = index + 1;
@@ -165,6 +172,46 @@ test('runner reconnects after Discord drops the pipe and re-sends the presence',
   assert.ok(second.sent.length >= 2, 'new connection re-sends the presence and clears on shutdown');
   assert.equal(second.sent[0]?.details, 'In the terminal');
   assert.equal(second.sent.at(-1), null);
+});
+
+test('runner applies a reloaded config live and keeps the state object current', async () => {
+  const client = new FakeClient(true);
+  const state = createRunnerState(config());
+  let tick = 0;
+  await runScenario({
+    snapshots: Array.from({ length: 5 }, () => snapshot()),
+    createClient: () => client,
+    state,
+    reloadConfig: () => (++tick === 3 ? { ...mergeConfig({ preset: 'fun' }), clientId: '123456789012345678', pollIntervalMs: 1 } : null),
+  });
+
+  assert.equal(client.sent[0]?.details, 'In the terminal');
+  assert.equal(client.sent[1]?.details, 'Staring at a blinking cursor', 'new wording sent right after the reload');
+  assert.equal(client.sent.at(-1), null);
+  assert.equal(state.config.preset, 'fun');
+  assert.equal(state.warpRunning, true);
+  assert.equal(state.warpFocused, true);
+  assert.equal(state.discordConnected, false, 'cleared on shutdown');
+});
+
+test('runner reconnects with the new client id when it changes', async () => {
+  const clients: FakeClient[] = [];
+  let tick = 0;
+  await runScenario({
+    snapshots: Array.from({ length: 6 }, () => snapshot()),
+    createClient: (clientId) => {
+      const client = new FakeClient(true, clientId);
+      clients.push(client);
+      return client;
+    },
+    reloadConfig: () => (++tick === 3 ? { ...config(), clientId: '999999999999999999' } : null),
+  });
+
+  assert.equal(clients.length, 2);
+  assert.equal(clients[0]?.clientId, '123456789012345678');
+  assert.equal(clients[1]?.clientId, '999999999999999999');
+  assert.equal(clients[0]?.connected, false, 'old client was destroyed');
+  assert.ok(clients[1]!.sent.length >= 1);
 });
 
 test('runner survives a failing snapshot and carries on', async () => {

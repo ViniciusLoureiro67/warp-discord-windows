@@ -60,10 +60,16 @@ export function createLogger(options: LoggerOptions = {}): Logger {
   if (file) rotateIfNeeded(file, options.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES);
 
   const paint = (text: string, code: string): string => (colors ? `${code}${text}${ANSI.reset}` : text);
+  let writesSinceRotationCheck = 0;
 
   const write = (level: LogLevel, message: string): void => {
     if (level === 'debug' && !verbose) return;
     const now = new Date();
+    // Long-running instances keep appending for weeks; re-check the size now and then.
+    if (file && ++writesSinceRotationCheck >= 500) {
+      writesSinceRotationCheck = 0;
+      rotateIfNeeded(file, options.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES);
+    }
     if (toConsole) {
       const time = paint(clock(now), ANSI.dim);
       const body =
