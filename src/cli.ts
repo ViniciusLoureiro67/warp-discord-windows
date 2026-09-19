@@ -475,7 +475,9 @@ function configCommand(args: ParsedArgs): void {
   const save = (next: Overrides): void => saveOverrides(next, stored.path);
   const restartHint = (): void => {
     if (findRunningInstance() !== null) {
-      console.log(`${INFO} Restart the background instance to apply: ${APP_NAME} stop && ${APP_NAME} start`);
+      console.log(
+        `${INFO} Restart the running instance to apply: ${APP_NAME} stop && ${APP_NAME} start (or Ctrl+C and run again).`,
+      );
     }
   };
 
