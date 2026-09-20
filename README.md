@@ -244,7 +244,6 @@ Only visible top-level windows count. Run `warp-discord-windows doctor` and open
 ## Roadmap
 
 - [ ] Optional shell hook for the current directory and git branch, independent of the window title
-- [ ] Hot-reload the config without restarting
 - [ ] Single-file `.exe` release for people without Node.js
 - [ ] System tray icon
 - [ ] `winget` package
